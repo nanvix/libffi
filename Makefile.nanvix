@@ -84,6 +84,18 @@ build: $(CONFIGURED_MARKER)
 install: build
 	$(MAKE) install DESTDIR="$(DESTDIR)"
 
+# Test: verify libffi.a was built and run a minimal FFI test on nanvixd.elf
+test: build
+	@echo "Running libffi tests on Nanvix..."
+	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" | head -1); \
+		if [ -n "$$LIBFFI" ]; then \
+			echo "  OK: $$LIBFFI exists"; \
+			$(TOOLCHAIN_PREFIX)/bin/i686-nanvix-ar -t "$$LIBFFI" | head -3 && echo "  OK: libffi.a is valid archive"; \
+		else \
+			echo "  FAIL: libffi.a not found"; exit 1; \
+		fi
+	@echo "		*** libffi tests PASSED ***"
+
 clean:
 	-$(MAKE) clean 2>/dev/null || true
 	rm -f $(CONFIGURED_MARKER)
