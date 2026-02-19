@@ -240,11 +240,13 @@ package: build
 	$(eval ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE))
 	rm -rf dist/$(ARTIFACT_NAME)
 	mkdir -p dist/$(ARTIFACT_NAME)/sysroot/lib \
-	dist/$(ARTIFACT_NAME)/sysroot/include
+	dist/$(ARTIFACT_NAME)/sysroot/include \
+	dist/$(ARTIFACT_NAME)/sysroot/bin
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
 	cp -f "$$LIBFFI" dist/$(ARTIFACT_NAME)/sysroot/lib/
 	@find . -name "ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \;
 	@find . -name "ffitarget.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \;
+	-cp -f ffi_test$(EXE) dist/$(ARTIFACT_NAME)/sysroot/bin/ 2>/dev/null || true
 	tar -cjf dist/$(ARTIFACT_NAME).tar.bz2 -C dist/$(ARTIFACT_NAME) sysroot
 	@echo "  Package: dist/$(ARTIFACT_NAME).tar.bz2"
 	@echo "  Contents:"
