@@ -203,6 +203,7 @@ jobs:
           sysroot/
             lib/libffi.a
             include/{ffi.h,ffitarget.h}
+            bin/ffi_test.elf
           \`\`\`
 
           **Dependencies:** None (standalone library)" \
