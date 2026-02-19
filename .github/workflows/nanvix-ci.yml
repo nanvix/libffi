@@ -98,7 +98,8 @@ jobs:
       - name: Build
         run: |
           make -f Makefile.nanvix CONFIG_NANVIX=y \
-            NANVIX_HOME="$NANVIX_HOME" NANVIX_TOOLCHAIN="/opt/nanvix" all
+            NANVIX_HOME="$NANVIX_HOME" NANVIX_TOOLCHAIN="/opt/nanvix" \
+            INSTALL_PREFIX="/sysroot" all
 
       - name: Smoke Tests
         run: |
