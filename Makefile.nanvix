@@ -244,8 +244,20 @@ package: build
 	dist/$(ARTIFACT_NAME)/sysroot/bin
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
 	cp -f "$$LIBFFI" dist/$(ARTIFACT_NAME)/sysroot/lib/
-	@find . -name "ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \;
-	@find . -name "ffitarget.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \;
+	@# Copy headers from the configure-generated include directory (not from
+	@# src/ subdirectories, which contain arch-specific variants — the last
+	@# one copied by find would win, potentially overwriting x86/ffitarget.h
+	@# with m32r/ffitarget.h that has FFI_CLOSURES=0).
+	@INCLUDE_DIR=$$(find . -path "*/include/ffi.h" -not -path "*/src/*" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
+	if [ -n "$$INCLUDE_DIR" ] && [ -f "$$INCLUDE_DIR/ffitarget.h" ]; then \
+	  cp -f "$$INCLUDE_DIR/ffi.h" dist/$(ARTIFACT_NAME)/sysroot/include/; \
+	  cp -f "$$INCLUDE_DIR/ffitarget.h" dist/$(ARTIFACT_NAME)/sysroot/include/; \
+	  echo "  Headers from $$INCLUDE_DIR (FFI_CLOSURES=$$(grep -o 'FFI_CLOSURES[[:space:]]*[01]' "$$INCLUDE_DIR/ffitarget.h"))"; \
+	else \
+	  echo "  WARNING: configure-generated include dir not found, falling back to find"; \
+	  find . -name "ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \; ; \
+	  find . -name "ffitarget.h" -path "*/x86/*" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \; ; \
+	fi
 	-cp -f ffi_test$(EXE) dist/$(ARTIFACT_NAME)/sysroot/bin/ 2>/dev/null || true
 	tar -cjf dist/$(ARTIFACT_NAME).tar.bz2 -C dist/$(ARTIFACT_NAME) sysroot
 	@echo "  Package: dist/$(ARTIFACT_NAME).tar.bz2"
