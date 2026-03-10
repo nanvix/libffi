@@ -189,6 +189,55 @@ endif
 # --- Functional tests: build and run a minimal FFI test ---
 test-functional: build
 	@echo "=== libffi functional tests ==="
+ifeq ($(PROCESS_MODE),standalone)
+ifdef CONFIG_NANVIX_DOCKER
+	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
+	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
+	  echo "  Building ffi_test$(EXE) (libffi=$$LIBFFI, include=$$FFI_INCLUDE)..."; \
+	  printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c; \
+	  $(DOCKER_RUN) $(DOCKER_TOOLCHAIN_PATH)/bin/i686-nanvix-gcc -O2 -I"$$FFI_INCLUDE" _ffi_test.c \
+	    "$$LIBFFI" \
+	    -static -T$(DOCKER_SYSROOT_PATH)/lib/user.ld -Wl,--allow-multiple-definition \
+	    -Wl,--start-group $(DOCKER_SYSROOT_PATH)/lib/libposix.a \
+	    $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libc.a \
+	    $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libm.a -Wl,--end-group \
+	    -o ffi_test$(EXE); \
+	  rm -f _ffi_test.c; \
+	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
+	@echo "  Running ffi_test$(EXE) via nanvixd.elf standalone (Docker)..."
+	$(DOCKER_RUN_FUNCTIONAL) sh -c '\
+	  mkdir -p /tmp/nanvix-ramfs && \
+	  cp $(DOCKER_WORKSPACE_PATH)/ffi_test$(EXE) /tmp/nanvix-ramfs/ && \
+	  ./bin/mkramfs.elf -o /tmp/rootfs.img /tmp/nanvix-ramfs/ && \
+	  timeout --foreground 120 ./bin/nanvixd.elf \
+	    -bin-dir ./bin -ramfs /tmp/rootfs.img \
+	    -- ./ffi_test$(EXE)'
+	@echo "  PASS: ffi_test standalone (exit code 0)"
+else
+	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
+	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
+	  echo "  Building ffi_test$(EXE) (libffi=$$LIBFFI, include=$$FFI_INCLUDE)..."; \
+	  printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > /tmp/ffi_test.c; \
+	  $(TOOLCHAIN_PREFIX)/bin/i686-nanvix-gcc -O2 -I"$$FFI_INCLUDE" /tmp/ffi_test.c \
+	    "$$LIBFFI" \
+	    -static -T$(SYSROOT_PATH)/lib/user.ld -Wl,--allow-multiple-definition \
+	    -Wl,--start-group $(SYSROOT_PATH)/lib/libposix.a \
+	    $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libc.a \
+	    $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libm.a -Wl,--end-group \
+	    -o ffi_test$(EXE); \
+	  rm -f /tmp/ffi_test.c; \
+	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
+	@echo "  Running ffi_test$(EXE) via nanvixd.elf standalone..."
+	@rm -rf /tmp/nanvix-ramfs && mkdir -p /tmp/nanvix-ramfs
+	@cp $(abspath ffi_test$(EXE)) /tmp/nanvix-ramfs/
+	"$(SYSROOT_PATH)/bin/mkramfs.elf" -o /tmp/rootfs.img /tmp/nanvix-ramfs/
+	cd "$(SYSROOT_PATH)" && timeout --foreground 120 ./bin/nanvixd.elf \
+	  -bin-dir ./bin -ramfs /tmp/rootfs.img \
+	  -- ./ffi_test$(EXE)
+	@rm -rf /tmp/nanvix-ramfs /tmp/rootfs.img
+	@echo "  PASS: ffi_test standalone (exit code 0)"
+endif
+else
 ifdef CONFIG_NANVIX_DOCKER
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
 	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
@@ -224,6 +273,7 @@ else
 	@echo "  Running ffi_test$(EXE) via nanvixd.elf..."
 	cd "$(SYSROOT_PATH)" && timeout --foreground 120 ./bin/nanvixd.elf -- $(abspath ffi_test$(EXE))
 	@echo "  PASS: ffi_test (exit code 0)"
+endif
 endif
 	@echo "  PASS: libffi functional tests"
 
