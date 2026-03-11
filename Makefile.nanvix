@@ -91,6 +91,7 @@ ifdef CONFIG_NANVIX
   PREFIX ?= $(SYSROOT_PATH)
   PLATFORM ?= unknown
   PROCESS_MODE ?= unknown
+  MEMORY_SIZE ?= unknown
 else
   ifneq ($(MAKECMDGOALS),clean)
     $(error CONFIG_NANVIX must be set to 'y'. Usage: make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/path/to/sysroot)
@@ -287,7 +288,7 @@ test: test-smoke test-integration test-functional
 
 package: build
 	@echo "=== Packaging libffi release ==="
-	$(eval ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE))
+	$(eval ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE)-$(MEMORY_SIZE))
 	rm -rf dist/$(ARTIFACT_NAME)
 	mkdir -p dist/$(ARTIFACT_NAME)/sysroot/lib \
 	dist/$(ARTIFACT_NAME)/sysroot/include \
@@ -320,7 +321,7 @@ package: build
 
 verify-package:
 	@echo "=== Verifying libffi package ==="
-	$(eval ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE))
+	$(eval ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE)-$(MEMORY_SIZE))
 	@TARBALL="dist/$(ARTIFACT_NAME).tar.bz2"; \
 	if [ ! -f "$$TARBALL" ]; then \
 	  echo "FAIL: Package tarball not found: $$TARBALL"; exit 1; \
