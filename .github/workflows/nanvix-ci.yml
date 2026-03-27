@@ -83,6 +83,16 @@ jobs:
           /tmp/zutil-venv/bin/pip install "$WHEEL_URL"
           ln -sf /tmp/zutil-venv/bin/nanvix-zutil /usr/local/bin/nanvix-zutil
 
+      - name: Prepare libffi sources
+        run: |
+          # The git repo may not have a pre-generated configure script.
+          # Download the release tarball which includes it.
+          if [ ! -f configure ]; then
+            curl -fsSL -o /tmp/libffi-3.4.6.tar.gz https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz
+            tar xf /tmp/libffi-3.4.6.tar.gz -C /tmp
+            cp -a /tmp/libffi-3.4.6/* .
+          fi
+
       - name: Setup
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
