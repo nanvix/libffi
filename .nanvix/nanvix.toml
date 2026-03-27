@@ -1,0 +1,6 @@
+manifest-version = "0.1.0"
+
+[package]
+name = "libffi"
+version = "3.4.6"
+nanvix-version = "latest"
