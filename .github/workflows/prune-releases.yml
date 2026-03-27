@@ -1,0 +1,94 @@
+# Copyright(c) The Maintainers of Nanvix.
+# Licensed under the MIT License.
+
+# ==========================================================================
+# Release Retention Workflow
+#
+# Deletes CI-generated releases older than 90 days.
+#
+# Releases with tags NOT matching the CI pattern
+# ({version}-nanvix-{nanvix_version}) are preserved — use non-matching
+# tags for milestone releases you want to keep.
+# ==========================================================================
+
+name: Prune Old Releases
+
+on:
+  schedule:
+    # Run every Sunday at 04:00 UTC.
+    # Off-peak hour to reduce rate-limit contention.
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+jobs:
+  prune:
+    name: Prune Releases Older Than 90 Days
+    # Guard: only run in nanvix/libffi to prevent accidental reuse in forks.
+    if: github.repository == 'nanvix/libffi'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Delete expired CI releases
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const RETENTION_DAYS = 90;
+            const MS_PER_DAY = 24 * 60 * 60 * 1000;
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - RETENTION_DAYS);
+
+            // Match CI-generated tags:
+            //   semver:    {version}-nanvix-{nanvix_version}  e.g. 3.4.6-nanvix-0.12.267
+            //   commitish: {version}-nanvix-{sha7}            e.g. 3.4.6-nanvix-abc1234
+            const ciTagRe = /^\d+\.\d+\.\d+-nanvix-(\d+\.\d+\.\d+|[0-9a-f]{7})$/;
+
+            const releases = await github.paginate(
+              github.rest.repos.listReleases,
+              { owner, repo, per_page: 100 }
+            );
+
+            let deleted = 0;
+            for (const rel of releases) {
+              if (rel.draft) continue;
+
+              // Only prune CI-generated releases — preserve everything else
+              if (!ciTagRe.test(rel.tag_name)) continue;
+
+              // Use published_at for age/cutoff when available, falling back to created_at.
+              const effectiveDate = rel.published_at
+                ? new Date(rel.published_at)
+                : new Date(rel.created_at);
+              if (effectiveDate >= cutoff) continue;
+
+              const ageDays = Math.floor((Date.now() - effectiveDate) / MS_PER_DAY);
+              core.info(
+                `Deleting ${rel.tag_name} (effective date ${effectiveDate.toISOString()}, age ${ageDays}d).`
+              );
+
+              try {
+                await github.rest.repos.deleteRelease({
+                  owner, repo, release_id: rel.id,
+                });
+              } catch (error) {
+                if (error.status !== 404 && error.status !== 422) throw error;
+                core.info(`Release ${rel.tag_name} already deleted.`);
+              }
+
+              // Best-effort tag cleanup — log failures without halting.
+              try {
+                await github.rest.git.deleteRef({
+                  owner, repo, ref: `tags/${rel.tag_name}`,
+                });
+              } catch (error) {
+                core.warning(`Failed to delete tag ${rel.tag_name}: ${error.message}`);
+              }
+
+              deleted++;
+            }
+
+            core.info(`Pruned ${deleted} release(s) older than ${RETENTION_DAYS} days.`);
