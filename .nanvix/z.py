@@ -24,7 +24,7 @@ class LibffiBuild(ZScript):
             log.fatal(
                 f"{CFG_SYSROOT} is not set.",
                 code=EXIT_MISSING_DEP,
-                hint="Run `./z setup` first to download the sysroot.",
+                hint="Run `nanvix-zutil setup` first to download the sysroot.",
             )
         toolchain = self.config.get(CFG_TOOLCHAIN, "/opt/nanvix")
 
