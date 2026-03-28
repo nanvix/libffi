@@ -1,0 +1,4 @@
+[package]
+name = "libffi"
+version = "3.4.6"
+nanvix-version = "latest"
