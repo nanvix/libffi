@@ -146,7 +146,7 @@ endif
 # ===========================================================================
 
 # --- Smoke tests: verify build artifacts (no runtime needed) ---
-test-smoke: build
+test-smoke:
 	@echo "=== libffi smoke tests ==="
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
 	if [ -n "$$LIBFFI" ]; then \
@@ -164,7 +164,7 @@ test-smoke: build
 	@echo "  PASS: libffi smoke tests"
 
 # --- Integration tests: verify archive contents ---
-test-integration: build
+test-integration:
 	@echo "=== libffi integration tests ==="
 ifdef CONFIG_NANVIX_DOCKER
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
@@ -188,7 +188,7 @@ endif
 	@echo "  PASS: libffi integration tests"
 
 # --- Functional tests: build and run a minimal FFI test ---
-test-functional: build
+test-functional:
 	@echo "=== libffi functional tests ==="
 ifeq ($(PROCESS_MODE),standalone)
 ifdef CONFIG_NANVIX_DOCKER
