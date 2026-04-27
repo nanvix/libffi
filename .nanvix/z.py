@@ -122,7 +122,17 @@ class LibffiBuild(ZScript):
         self.run(*self._make_args(*targets), cwd=self.repo_root)
 
     def _run_tests_windows(self) -> None:
-        """Run tests natively on Windows using nanvixd.exe."""
+        """Run tests natively on Windows using nanvixd.exe.
+
+        Only standalone mode is tested on Windows; multi-process and
+        single-process require linuxd, which is Linux-only.  Standalone
+        test binaries are discovered in the repository root, where the
+        Makefile emits the ELF outputs, then fall back to ``build/``.
+        """
+        if self.config.deployment_mode != "standalone":
+            print(f"Skipping tests on Windows for mode '{self.config.deployment_mode}' (requires linuxd).")
+            return
+
         sysroot = self.config.get(CFG_SYSROOT, "")
         if not sysroot:
             log.fatal(f"{CFG_SYSROOT} is not set.", code=EXIT_MISSING_DEP, hint="Run `./z setup` first.")
@@ -134,13 +144,25 @@ class LibffiBuild(ZScript):
         if not mkramfs.is_file():
             log.fatal("mkramfs.exe not found.", code=EXIT_MISSING_DEP, hint="Run `./z setup` first.")
 
-        build_dir = self.repo_root / "build"
-        test_binaries = sorted(build_dir.glob("*.elf")) if build_dir.is_dir() else []
+        # The Makefile outputs ffi_test.elf to the repo root.  Search
+        # there first, then fall back to build/ for forward-compat.
+        test_allowlist = {"ffi_test.elf"}
+        test_binaries: list[Path] = []
+        for candidate in [self.repo_root, self.repo_root / "build"]:
+            if candidate.is_dir():
+                elfs = sorted(candidate.glob("*.elf"))
+                found = [b for b in elfs if b.name in test_allowlist]
+                for b in found:
+                    if b.name not in {x.name for x in test_binaries}:
+                        test_binaries.append(b)
 
         if not test_binaries:
-            print("No test binaries found in build/ -- smoke test only.")
-            print("OK: library-only repo, no functional tests to run on Windows")
-            return
+            expected = ", ".join(sorted(test_allowlist))
+            log.fatal(
+                f"No allowlisted test binaries found. Expected: {expected}.",
+                code=EXIT_MISSING_DEP,
+                hint="Build the test binaries first (run the Linux CI build) and then rerun `./z test`.",
+            )
 
         failed = []
         for binary in test_binaries:

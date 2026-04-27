@@ -212,7 +212,7 @@ ifdef CONFIG_NANVIX_DOCKER
 	  ./bin/mkramfs.elf -o /tmp/rootfs.img /tmp/nanvix-ramfs/ && \
 	  timeout --foreground 120 ./bin/nanvixd.elf \
 	    -bin-dir ./bin -ramfs /tmp/rootfs.img \
-	    -- $(abspath ffi_test$(EXE))'
+	    -- $(DOCKER_WORKSPACE_PATH)/ffi_test$(EXE)'
 	@echo "  PASS: ffi_test standalone (exit code 0)"
 else
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
