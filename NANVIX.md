@@ -262,7 +262,9 @@ shared CI configuration and are not defined directly in this repository's workfl
 
 ### Build Matrix
 
-The CI runs on 6 different platform/process-mode configurations:
+The CI runs on 6 different platform/process-mode configurations on Linux, plus standalone-only Windows tests:
+
+#### Linux (build + full test)
 
 | Platform | Process Mode |
 |----------|--------------|
@@ -272,6 +274,17 @@ The CI runs on 6 different platform/process-mode configurations:
 | microvm | multi-process |
 | microvm | single-process |
 | microvm | standalone |
+
+#### Windows (standalone test)
+
+| Platform | Process Mode |
+|----------|--------------|
+| hyperlight | standalone |
+| microvm | standalone |
+
+> **Note:** Single-process and multi-process modes are Linux-only because they
+> depend on `nanvixd` Linux daemon features not available on Windows.
+> Windows tests run the standalone deployment mode using `nanvixd.exe`.
 
 All configurations run in parallel with `fail-fast: false`, ensuring that all platforms are tested even if one fails.
 
