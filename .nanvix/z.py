@@ -1,3 +1,4 @@
+# pyright: basic
 # Copyright(c) The Maintainers of Nanvix.
 # Licensed under the MIT License.
 
@@ -12,16 +13,21 @@ Usage:
 """
 
 import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import subprocess
-import sys
-
-from nanvix_zutil import CFG_SYSROOT, CFG_TOOLCHAIN, EXIT_MISSING_DEP, ZScript, log
+from nanvix_zutil import (  # type: ignore[import-not-found]
+    CFG_SYSROOT,
+    CFG_TOOLCHAIN,
+    EXIT_MISSING_DEP,
+    ZScript,
+    log,
+)
 
 # Makefile variable names (build-system-specific).
 _MAKE_VAR_CONFIG = "CONFIG_NANVIX"
@@ -36,7 +42,6 @@ _LIBFFI_TARBALL_URL = (
     f"https://github.com/libffi/libffi/releases/download/v{_LIBFFI_VERSION}/"
     f"libffi-{_LIBFFI_VERSION}.tar.gz"
 )
-
 
 
 IS_WINDOWS = sys.platform == "win32"
@@ -89,7 +94,10 @@ class LibffiBuild(ZScript):
             tarball = Path(tmp) / f"libffi-{_LIBFFI_VERSION}.tar.gz"
             urllib.request.urlretrieve(_LIBFFI_TARBALL_URL, tarball)
             with tarfile.open(tarball, "r:gz") as tf:
-                tf.extractall(tmp)
+                if sys.version_info >= (3, 12):
+                    tf.extractall(tmp, filter="data")
+                else:
+                    tf.extractall(tmp)  # noqa: S202
             extracted = Path(tmp) / f"libffi-{_LIBFFI_VERSION}"
             for item in extracted.iterdir():
                 dest = self.repo_root / item.name
@@ -130,19 +138,34 @@ class LibffiBuild(ZScript):
         Makefile emits the ELF outputs, then fall back to ``build/``.
         """
         if self.config.deployment_mode != "standalone":
-            print(f"Skipping tests on Windows for mode '{self.config.deployment_mode}' (requires linuxd).")
+            print(
+                f"Skipping tests on Windows for mode"
+                f" '{self.config.deployment_mode}' (requires linuxd)."
+            )
             return
 
         sysroot = self.config.get(CFG_SYSROOT, "")
         if not sysroot:
-            log.fatal(f"{CFG_SYSROOT} is not set.", code=EXIT_MISSING_DEP, hint="Run `./z setup` first.")
+            log.fatal(
+                f"{CFG_SYSROOT} is not set.",
+                code=EXIT_MISSING_DEP,
+                hint="Run `./z setup` first.",
+            )
         sysroot_path = Path(sysroot)
         nanvixd = sysroot_path / "bin" / "nanvixd.exe"
         mkramfs = sysroot_path / "bin" / "mkramfs.exe"
         if not nanvixd.is_file():
-            log.fatal("nanvixd.exe not found.", code=EXIT_MISSING_DEP, hint="Run `./z setup` first.")
+            log.fatal(
+                "nanvixd.exe not found.",
+                code=EXIT_MISSING_DEP,
+                hint="Run `./z setup` first.",
+            )
         if not mkramfs.is_file():
-            log.fatal("mkramfs.exe not found.", code=EXIT_MISSING_DEP, hint="Run `./z setup` first.")
+            log.fatal(
+                "mkramfs.exe not found.",
+                code=EXIT_MISSING_DEP,
+                hint="Run `./z setup` first.",
+            )
 
         # The Makefile outputs ffi_test.elf to the repo root.  Search
         # there first, then fall back to build/ for forward-compat.
@@ -159,9 +182,14 @@ class LibffiBuild(ZScript):
         if not test_binaries:
             expected = ", ".join(sorted(test_allowlist))
             log.fatal(
-                f"No allowlisted test binaries found. Expected: {expected}.",
+                f"No allowlisted test binaries found."
+                f" Expected: {expected}.",
                 code=EXIT_MISSING_DEP,
-                hint="Build the test binaries first (run the Linux CI build) and then rerun `./z test`.",
+                hint=(
+                    "Build the test binaries first"
+                    " (run the Linux CI build)"
+                    " and then rerun `./z test`."
+                ),
             )
 
         failed = []
@@ -192,9 +220,18 @@ class LibffiBuild(ZScript):
                     continue
                 try:
                     result = subprocess.run(
-                        [str(nanvixd.resolve()), "-bin-dir", str((sysroot_path / "bin").resolve()),
-                         "-ramfs", str(ramfs_img), "--", f"./{binary.name}"],
-                        stdin=subprocess.DEVNULL, timeout=120,
+                        [
+                            str(nanvixd.resolve()),
+                            "-bin-dir",
+                            str((sysroot_path / "bin").resolve()),
+                            "-ramfs",
+                            str(ramfs_img),
+                            "--",
+                            f"./{binary.name}",
+                        ],
+                        stdin=subprocess.DEVNULL,
+                        timeout=120,
+                        check=False,
                     )
                     if result.returncode != 0:
                         print(f"FAIL {name} (exit code {result.returncode})")
@@ -207,7 +244,8 @@ class LibffiBuild(ZScript):
 
         if failed:
             msg = " ".join(failed)
-            raise RuntimeError(f"{len(failed)} test(s) failed: {msg}")
+            err_msg = f"{len(failed)} test(s) failed: {msg}"
+            raise RuntimeError(err_msg)
         print(f"\t\t*** All {len(test_binaries)} tests PASSED ***")
 
     def release(self) -> None:
