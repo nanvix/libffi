@@ -44,12 +44,3 @@ __pycache__
 .docker_home
 emsdk
 test-results
-
-# Nanvix build state (keep .nanvix/z.py tracked)
-.nanvix/venv/
-.nanvix/cache/
-.nanvix/sysroot/
-.nanvix/buildroot/
-.nanvix/env.json
-.nanvix/nanvix.lock
-.venv/
