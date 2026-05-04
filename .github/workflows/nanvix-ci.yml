@@ -7,9 +7,9 @@ on:
   schedule:
     - cron: "0 9 * * *"
   push:
-    branches: [ "nanvix/**" ]
+    branches: ["nanvix/**"]
   pull_request:
-    branches: [ "nanvix/**" ]
+    branches: ["nanvix/**"]
   workflow_dispatch:
 
 permissions:
