@@ -46,6 +46,7 @@ _LIBFFI_TARBALL_URL = (
 
 IS_WINDOWS = sys.platform == "win32"
 
+
 class LibffiBuild(ZScript):
     """Build script for nanvix/libffi."""
 
@@ -63,17 +64,21 @@ class LibffiBuild(ZScript):
         toolchain_p = self.translate_path(Path(toolchain))
 
         args = [
-            "make", "-f", "Makefile.nanvix",
+            "make",
+            "-f",
+            "Makefile.nanvix",
             f"{_MAKE_VAR_CONFIG}=y",
             f"{_MAKE_VAR_HOME}={sysroot_p}",
             f"{_MAKE_VAR_TOOLCHAIN}={toolchain_p}",
         ]
 
-        args.extend([
-            f"{_MAKE_VAR_PLATFORM}={self.config.machine}",
-            f"{_MAKE_VAR_PROCESS_MODE}={self.config.deployment_mode}",
-            f"{_MAKE_VAR_MEMORY_SIZE}={self.config.memory_size}",
-        ])
+        args.extend(
+            [
+                f"{_MAKE_VAR_PLATFORM}={self.config.machine}",
+                f"{_MAKE_VAR_PROCESS_MODE}={self.config.deployment_mode}",
+                f"{_MAKE_VAR_MEMORY_SIZE}={self.config.memory_size}",
+            ]
+        )
 
         args.extend(targets)
         return args
@@ -182,8 +187,7 @@ class LibffiBuild(ZScript):
         if not test_binaries:
             expected = ", ".join(sorted(test_allowlist))
             log.fatal(
-                f"No allowlisted test binaries found."
-                f" Expected: {expected}.",
+                f"No allowlisted test binaries found." f" Expected: {expected}.",
                 code=EXIT_MISSING_DEP,
                 hint=(
                     "Build the test binaries first"
@@ -208,7 +212,8 @@ class LibffiBuild(ZScript):
                 try:
                     subprocess.run(
                         [str(mkramfs.resolve()), "-o", str(ramfs_img), str(ramfs_dir)],
-                        check=True, timeout=60,
+                        check=True,
+                        timeout=60,
                     )
                 except subprocess.CalledProcessError as e:
                     print(f"FAIL {name} (mkramfs exit code {e.returncode})")
@@ -256,7 +261,10 @@ class LibffiBuild(ZScript):
     def clean(self) -> None:
         """Remove build artifacts."""
         self.run(
-            "make", "-f", "Makefile.nanvix", "clean",
+            "make",
+            "-f",
+            "Makefile.nanvix",
+            "clean",
             cwd=self.repo_root,
         )
 
