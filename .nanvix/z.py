@@ -254,9 +254,13 @@ class LibffiBuild(ZScript):
         print(f"\t\t*** All {len(test_binaries)} tests PASSED ***")
 
     def release(self) -> None:
-        """Package the libffi release tarball and verify it."""
-        self.run(*self._make_args("package"), cwd=self.repo_root)
-        self.run(*self._make_args("verify-package"), cwd=self.repo_root)
+        """Package the libffi release tarball and verify it.
+
+        Runs natively on the host — only file copies and tarball
+        creation, which do not need the cross-compiler.
+        """
+        self.run(*self._make_args("package"), cwd=self.repo_root, docker=False)
+        self.run(*self._make_args("verify-package"), cwd=self.repo_root, docker=False)
 
     def clean(self) -> None:
         """Remove build artifacts."""

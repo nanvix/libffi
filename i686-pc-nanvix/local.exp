@@ -1,0 +1,3 @@
+set CC_FOR_TARGET "/opt/nanvix/bin/i686-nanvix-gcc"
+set CXX_FOR_TARGET "i686-nanvix-g++"
+set compiler_vendor "gnu"
