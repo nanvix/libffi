@@ -26,6 +26,7 @@ from nanvix_zutil import (  # type: ignore[import-not-found]
     CFG_TOOLCHAIN,
     EXIT_MISSING_DEP,
     ZScript,
+    is_windows,
     log,
 )
 
@@ -42,9 +43,6 @@ _LIBFFI_TARBALL_URL = (
     f"https://github.com/libffi/libffi/releases/download/v{_LIBFFI_VERSION}/"
     f"libffi-{_LIBFFI_VERSION}.tar.gz"
 )
-
-
-IS_WINDOWS = sys.platform == "win32"
 
 
 class LibffiBuild(ZScript):
@@ -98,7 +96,7 @@ class LibffiBuild(ZScript):
         with TemporaryDirectory() as tmp:
             tarball = Path(tmp) / f"libffi-{_LIBFFI_VERSION}.tar.gz"
             urllib.request.urlretrieve(_LIBFFI_TARBALL_URL, tarball)
-            with tarfile.open(tarball, "r:gz") as tf:
+            with tarfile.open(tarball, "r:*") as tf:
                 if sys.version_info >= (3, 12):
                     tf.extractall(tmp, filter="data")
                 else:
@@ -128,7 +126,7 @@ class LibffiBuild(ZScript):
         On Windows, runs test binaries from build/ via nanvixd.exe natively,
         following the same pattern as posix-tests and cpython.
         """
-        if IS_WINDOWS:
+        if is_windows():
             self._run_tests_windows()
             return
         targets = self.targets if self.targets else ["test"]
@@ -187,7 +185,7 @@ class LibffiBuild(ZScript):
         if not test_binaries:
             expected = ", ".join(sorted(test_allowlist))
             log.fatal(
-                f"No allowlisted test binaries found." f" Expected: {expected}.",
+                f"No allowlisted test binaries found. Expected: {expected}.",
                 code=EXIT_MISSING_DEP,
                 hint=(
                     "Build the test binaries first"
