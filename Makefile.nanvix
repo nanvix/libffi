@@ -187,10 +187,9 @@ else
 endif
 	@echo "  PASS: libffi integration tests"
 
-# --- Functional tests: build and run a minimal FFI test ---
-test-functional:
-	@echo "=== libffi functional tests ==="
-ifeq ($(PROCESS_MODE),standalone)
+# --- Build the functional test binary (compile only, no run) ---
+test-functional-build:
+	@echo "=== Building ffi_test$(EXE) ==="
 ifdef CONFIG_NANVIX_DOCKER
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
 	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
@@ -205,15 +204,6 @@ ifdef CONFIG_NANVIX_DOCKER
 	    -o ffi_test$(EXE); \
 	  rm -f _ffi_test.c; \
 	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
-	@echo "  Running ffi_test$(EXE) via nanvixd.elf standalone (Docker)..."
-	$(DOCKER_RUN_FUNCTIONAL) sh -c '\
-	  mkdir -p /tmp/nanvix-ramfs && \
-	  cp $(DOCKER_WORKSPACE_PATH)/ffi_test$(EXE) /tmp/nanvix-ramfs/ && \
-	  ./bin/mkramfs.elf -o /tmp/rootfs.img /tmp/nanvix-ramfs/ && \
-	  timeout --foreground 120 ./bin/nanvixd.elf \
-	    -bin-dir ./bin -ramfs /tmp/rootfs.img \
-	    -- $(DOCKER_WORKSPACE_PATH)/ffi_test$(EXE)'
-	@echo "  PASS: ffi_test standalone (exit code 0)"
 else
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
 	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
@@ -228,16 +218,15 @@ else
 	    -o ffi_test$(EXE); \
 	  rm -f /tmp/ffi_test.c; \
 	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
-	@echo "  Running ffi_test$(EXE) via nanvixd.elf standalone..."
-	@rm -rf /tmp/nanvix-ramfs && mkdir -p /tmp/nanvix-ramfs
-	@cp $(abspath ffi_test$(EXE)) /tmp/nanvix-ramfs/
-	"$(SYSROOT_PATH)/bin/mkramfs.elf" -o /tmp/rootfs.img /tmp/nanvix-ramfs/
-	cd "$(SYSROOT_PATH)" && timeout --foreground 120 ./bin/nanvixd.elf \
-	  -bin-dir ./bin -ramfs /tmp/rootfs.img \
-	  -- $(abspath ffi_test$(EXE))
-	@rm -rf /tmp/nanvix-ramfs /tmp/rootfs.img
-	@echo "  PASS: ffi_test standalone (exit code 0)"
 endif
+
+# --- Functional tests: build and run a minimal FFI test ---
+test-functional:
+	@echo "=== libffi functional tests ==="
+ifeq ($(PROCESS_MODE),standalone)
+	@echo "  NOTE: Standalone functional tests are handled via ./z.sh."
+	@echo "  Delegating to: ./z.sh test test-functional"
+	@./z.sh --with-nanvix "$(NANVIX_HOME)" test test-functional
 else
 ifdef CONFIG_NANVIX_DOCKER
 	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
