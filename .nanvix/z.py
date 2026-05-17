@@ -13,7 +13,6 @@ Usage:
 """
 
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -124,23 +123,93 @@ class LibffiBuild(ZScript):
     def test(self) -> None:
         """Run the test suite.
 
-        On non-Windows, delegates to the Makefile (smoke + integration + functional).
-        On Windows, runs test binaries from build/ via nanvixd.exe natively,
-        following the same pattern as posix-tests and cpython.
+        Smoke and integration tests are always delegated to the Makefile.
+        The functional test in standalone mode is handled in Python via
+        make_initrd so that initrd creation is shared across platforms.
         """
         if IS_WINDOWS:
             self._run_tests_windows()
             return
-        targets = self.targets if self.targets else ["test"]
-        self.run(*self._make_args(*targets), cwd=self.repo_root)
+
+        if self.config.deployment_mode == "standalone":
+            # Smoke + integration via Makefile, functional via Python.
+            self.run(
+                *self._make_args("test-smoke", "test-integration"), cwd=self.repo_root
+            )
+            self._run_functional_standalone()
+        else:
+            targets = self.targets if self.targets else ["test"]
+            self.run(*self._make_args(*targets), cwd=self.repo_root)
+
+    def _run_functional_standalone(self) -> None:
+        """Run the standalone functional test using make_initrd.
+
+        Creates an initrd bundling ffi_test.elf with system daemons via
+        make_initrd, and a ramfs providing /tmp for test file output.
+        """
+        # Build the test binary (cross-compile via Docker/native toolchain).
+        self.run(*self._make_args("test-functional-build"), cwd=self.repo_root)
+
+        ffi_test_elf = self.repo_root / "ffi_test.elf"
+        if not ffi_test_elf.is_file():
+            log.fatal(
+                "ffi_test.elf not found after build.",
+                code=EXIT_MISSING_DEP,
+                hint="Check test-functional-build output for errors.",
+            )
+
+        print("=== libffi functional tests ===")
+        print("  Running ffi_test.elf via nanvixd standalone...")
+
+        sysroot = self.config.get(CFG_SYSROOT, "")
+        sysroot_path = Path(sysroot)
+        mkramfs = sysroot_path / "bin" / "mkramfs.elf"
+
+        # Bundle ffi_test.elf + daemons into an initrd.
+        initrd = self.make_initrd("ffi_test.elf")
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="nanvix_ffi_") as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                ramfs_dir = tmpdir_path / "ramfs"
+                ramfs_dir.mkdir()
+                (ramfs_dir / "tmp").mkdir(exist_ok=True)
+                ramfs_img = tmpdir_path / "rootfs.img"
+
+                self.run(
+                    str(mkramfs),
+                    "-o",
+                    str(ramfs_img),
+                    str(ramfs_dir),
+                    docker=False,
+                )
+
+                self.run(
+                    str(sysroot_path / "bin" / "nanvixd.elf"),
+                    "-bin-dir",
+                    str(sysroot_path / "bin"),
+                    "-ramfs",
+                    str(ramfs_img),
+                    "--",
+                    str(initrd),
+                    docker=False,
+                    timeout=120,
+                )
+        finally:
+            if initrd.exists():
+                initrd.unlink()
+
+        print("  PASS: ffi_test standalone (exit code 0)")
+        print("  PASS: libffi functional tests")
+        print("=== All libffi tests PASSED ===")
 
     def _run_tests_windows(self) -> None:
         """Run tests natively on Windows using nanvixd.exe.
 
         Only standalone mode is tested on Windows; multi-process and
-        single-process require linuxd, which is Linux-only.  Standalone
-        test binaries are discovered in the repository root, where the
-        Makefile emits the ELF outputs, then fall back to ``build/``.
+        single-process require linuxd, which is Linux-only.  Uses
+        make_initrd to bundle each test binary with system daemons,
+        and a ramfs providing /tmp for any test I/O.
         """
         if self.config.deployment_mode != "standalone":
             print(
@@ -196,56 +265,59 @@ class LibffiBuild(ZScript):
                 ),
             )
 
-        failed = []
+        failed: list[str] = []
         for binary in test_binaries:
             name = binary.stem
             print(f"RUN  {name}...")
-            with tempfile.TemporaryDirectory(prefix=f"nanvix_{name}_") as tmpdir:
-                tmpdir_path = Path(tmpdir)
-                ramfs_dir = tmpdir_path / "ramfs"
-                ramfs_dir.mkdir()
-                (ramfs_dir / "tmp").mkdir(exist_ok=True)
-                shutil.copy2(binary, ramfs_dir / binary.name)
-                # Write ramfs image alongside the ramfs source dir to avoid
-                # self-inclusion while keeping artifacts scoped to this temp dir.
-                ramfs_img = tmpdir_path / f"rootfs_{name}.img"
-                try:
-                    subprocess.run(
-                        [str(mkramfs.resolve()), "-o", str(ramfs_img), str(ramfs_dir)],
-                        check=True,
-                        timeout=60,
+            # make_initrd resolves binaries relative to repo_root;
+            # copy the ELF there temporarily unless it already lives there.
+            repo_elf = self.repo_root / binary.name
+            copied_elf = False
+            initrd: Path | None = None
+            try:
+                if binary.resolve() != repo_elf.resolve():
+                    if repo_elf.exists():
+                        raise FileExistsError(
+                            f"refusing to clobber existing {repo_elf}"
+                        )
+                    shutil.copy2(binary, repo_elf)
+                    copied_elf = True
+                initrd = self.make_initrd(binary.name)
+                with tempfile.TemporaryDirectory(prefix=f"nanvix_{name}_") as tmpdir:
+                    tmpdir_path = Path(tmpdir)
+                    ramfs_dir = tmpdir_path / "ramfs"
+                    ramfs_dir.mkdir()
+                    (ramfs_dir / "tmp").mkdir(exist_ok=True)
+                    ramfs_img = tmpdir_path / f"rootfs_{name}.img"
+
+                    self.run(
+                        str(mkramfs),
+                        "-o",
+                        str(ramfs_img),
+                        str(ramfs_dir),
+                        docker=False,
                     )
-                except subprocess.CalledProcessError as e:
-                    print(f"FAIL {name} (mkramfs exit code {e.returncode})")
-                    failed.append(name)
-                    continue
-                except subprocess.TimeoutExpired:
-                    print(f"FAIL {name} (mkramfs timeout)")
-                    failed.append(name)
-                    continue
-                try:
-                    result = subprocess.run(
-                        [
-                            str(nanvixd.resolve()),
-                            "-bin-dir",
-                            str((sysroot_path / "bin").resolve()),
-                            "-ramfs",
-                            str(ramfs_img),
-                            "--",
-                            f"./{binary.name}",
-                        ],
-                        stdin=subprocess.DEVNULL,
+
+                    self.run(
+                        str(nanvixd),
+                        "-bin-dir",
+                        str(sysroot_path / "bin"),
+                        "-ramfs",
+                        str(ramfs_img),
+                        "--",
+                        str(initrd),
+                        docker=False,
                         timeout=120,
-                        check=False,
                     )
-                    if result.returncode != 0:
-                        print(f"FAIL {name} (exit code {result.returncode})")
-                        failed.append(name)
-                    else:
-                        print(f"OK   {name}")
-                except subprocess.TimeoutExpired:
-                    print(f"FAIL {name} (timeout)")
-                    failed.append(name)
+                print(f"OK   {name}")
+            except SystemExit:
+                print(f"FAIL {name}")
+                failed.append(name)
+            finally:
+                if initrd is not None and initrd.exists():
+                    initrd.unlink()
+                if copied_elf and repo_elf.exists():
+                    repo_elf.unlink()
 
         if failed:
             msg = " ".join(failed)
