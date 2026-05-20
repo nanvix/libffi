@@ -20,12 +20,14 @@ import urllib.request
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from nanvix_zutil import (  # type: ignore[import-not-found]
+from nanvix_zutil import (
     CFG_SYSROOT,
-    TOOLCHAIN_CONTAINER_PATH,
     EXIT_MISSING_DEP,
+    TOOLCHAIN_CONTAINER_PATH,
     ZScript,
     log,
+    make_initrd,
+    run,
 )
 
 # Makefile variable names (build-system-specific).
@@ -58,7 +60,9 @@ class LibffiBuild(ZScript):
                 hint="Run `./z setup` first to download the sysroot.",
             )
         toolchain_p = str(TOOLCHAIN_CONTAINER_PATH)
-        sysroot_p = self.translate_path(Path(sysroot))
+        sysroot_p = (
+            self.docker.translate_path(Path(sysroot)) if self.docker else Path(sysroot)
+        )
 
         args = [
             "make",
@@ -108,10 +112,11 @@ class LibffiBuild(ZScript):
                     shutil.copy2(item, dest)
         log.info("configure script ready")
 
-    def setup(self) -> None:
+    def setup(self) -> bool:
         """Download the Nanvix sysroot and prepare autotools sources."""
-        super().setup()
+        ok = super().setup()
         self._ensure_configure()
+        return ok
 
     def build(self) -> None:
         """Cross-compile libffi.a and ffi_test.elf for Nanvix.
@@ -120,7 +125,7 @@ class LibffiBuild(ZScript):
         here, where Docker is available. The test step then just runs
         the pre-built binary natively.
         """
-        self.run(*self._make_args("all"), cwd=self.repo_root, docker=True)
+        run(*self._make_args("all"), cwd=self.repo_root, docker=self.docker)
 
     def test(self) -> None:
         """Run the test suite.
@@ -135,20 +140,18 @@ class LibffiBuild(ZScript):
 
         if self.config.deployment_mode == "standalone":
             # Smoke + integration via Makefile (native), functional via Python.
-            self.run(
+            run(
                 *self._make_args("test-smoke", "test-integration"),
                 cwd=self.repo_root,
-                docker=False,
             )
             self._run_functional_standalone()
         else:
             targets = self.targets if self.targets else ["test"]
             # Timeout bounds the functional run (Makefile no longer relies on
             # the non-portable `timeout --foreground` binary).
-            self.run(
+            run(
                 *self._make_args(*targets),
                 cwd=self.repo_root,
-                docker=False,
                 timeout=120,
             )
 
@@ -175,7 +178,7 @@ class LibffiBuild(ZScript):
         mkramfs = sysroot_path / "bin" / "mkramfs.elf"
 
         # Bundle ffi_test.elf + daemons into an initrd.
-        initrd = self.make_initrd("ffi_test.elf")
+        initrd = make_initrd(self, "ffi_test.elf")
 
         try:
             with tempfile.TemporaryDirectory(prefix="nanvix_ffi_") as tmpdir:
@@ -185,15 +188,14 @@ class LibffiBuild(ZScript):
                 (ramfs_dir / "tmp").mkdir(exist_ok=True)
                 ramfs_img = tmpdir_path / "rootfs.img"
 
-                self.run(
+                run(
                     str(mkramfs),
                     "-o",
                     str(ramfs_img),
                     str(ramfs_dir),
-                    docker=False,
                 )
 
-                self.run(
+                run(
                     str(sysroot_path / "bin" / "nanvixd.elf"),
                     "-bin-dir",
                     str(sysroot_path / "bin"),
@@ -201,7 +203,6 @@ class LibffiBuild(ZScript):
                     str(ramfs_img),
                     "--",
                     str(initrd),
-                    docker=False,
                     timeout=120,
                 )
         finally:
@@ -291,7 +292,7 @@ class LibffiBuild(ZScript):
                         )
                     shutil.copy2(binary, repo_elf)
                     copied_elf = True
-                initrd = self.make_initrd(binary.name)
+                initrd = make_initrd(self, binary.name)
                 with tempfile.TemporaryDirectory(prefix=f"nanvix_{name}_") as tmpdir:
                     tmpdir_path = Path(tmpdir)
                     ramfs_dir = tmpdir_path / "ramfs"
@@ -299,15 +300,14 @@ class LibffiBuild(ZScript):
                     (ramfs_dir / "tmp").mkdir(exist_ok=True)
                     ramfs_img = tmpdir_path / f"rootfs_{name}.img"
 
-                    self.run(
+                    run(
                         str(mkramfs),
                         "-o",
                         str(ramfs_img),
                         str(ramfs_dir),
-                        docker=False,
                     )
 
-                    self.run(
+                    run(
                         str(nanvixd),
                         "-bin-dir",
                         str(sysroot_path / "bin"),
@@ -315,7 +315,6 @@ class LibffiBuild(ZScript):
                         str(ramfs_img),
                         "--",
                         str(initrd),
-                        docker=False,
                         timeout=120,
                     )
                 print(f"OK   {name}")
@@ -336,18 +335,17 @@ class LibffiBuild(ZScript):
 
     def release(self) -> None:
         """Package the libffi release tarball and verify it."""
-        self.run(*self._make_args("package"), cwd=self.repo_root, docker=False)
-        self.run(*self._make_args("verify-package"), cwd=self.repo_root, docker=False)
+        run(*self._make_args("package"), cwd=self.repo_root)
+        run(*self._make_args("verify-package"), cwd=self.repo_root)
 
     def clean(self) -> None:
         """Remove build artifacts."""
-        self.run(
+        run(
             "make",
             "-f",
             "Makefile.nanvix",
             "clean",
             cwd=self.repo_root,
-            docker=False,
         )
 
 
