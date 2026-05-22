@@ -29,7 +29,6 @@ from nanvix_zutil import (  # type: ignore[import-not-found]
 )
 
 # Makefile variable names (build-system-specific).
-_MAKE_VAR_CONFIG = "CONFIG_NANVIX"
 _MAKE_VAR_HOME = "NANVIX_HOME"
 _MAKE_VAR_TOOLCHAIN = "NANVIX_TOOLCHAIN"
 _MAKE_VAR_PLATFORM = "PLATFORM"
@@ -58,15 +57,13 @@ class LibffiBuild(ZScript):
                 code=EXIT_MISSING_DEP,
                 hint="Run `./z setup` first to download the sysroot.",
             )
-        toolchain = str(TOOLCHAIN_CONTAINER_PATH)
+        toolchain_p = str(TOOLCHAIN_CONTAINER_PATH)
         sysroot_p = self.translate_path(Path(sysroot))
-        toolchain_p = toolchain
 
         args = [
             "make",
             "-f",
             "Makefile.nanvix",
-            f"{_MAKE_VAR_CONFIG}=y",
             f"{_MAKE_VAR_HOME}={sysroot_p}",
             f"{_MAKE_VAR_TOOLCHAIN}={toolchain_p}",
         ]
@@ -117,8 +114,13 @@ class LibffiBuild(ZScript):
         self._ensure_configure()
 
     def build(self) -> None:
-        """Cross-compile libffi.a for Nanvix."""
-        self.run(*self._make_args("all"), cwd=self.repo_root)
+        """Cross-compile libffi.a and ffi_test.elf for Nanvix.
+
+        Both the library and the functional-test binary are produced
+        here, where Docker is available. The test step then just runs
+        the pre-built binary natively.
+        """
+        self.run(*self._make_args("all"), cwd=self.repo_root, docker=True)
 
     def test(self) -> None:
         """Run the test suite.
@@ -132,30 +134,37 @@ class LibffiBuild(ZScript):
             return
 
         if self.config.deployment_mode == "standalone":
-            # Smoke + integration via Makefile, functional via Python.
+            # Smoke + integration via Makefile (native), functional via Python.
             self.run(
-                *self._make_args("test-smoke", "test-integration"), cwd=self.repo_root
+                *self._make_args("test-smoke", "test-integration"),
+                cwd=self.repo_root,
+                docker=False,
             )
             self._run_functional_standalone()
         else:
             targets = self.targets if self.targets else ["test"]
-            self.run(*self._make_args(*targets), cwd=self.repo_root)
+            # Timeout bounds the functional run (Makefile no longer relies on
+            # the non-portable `timeout --foreground` binary).
+            self.run(
+                *self._make_args(*targets),
+                cwd=self.repo_root,
+                docker=False,
+                timeout=120,
+            )
 
     def _run_functional_standalone(self) -> None:
         """Run the standalone functional test using make_initrd.
 
         Creates an initrd bundling ffi_test.elf with system daemons via
         make_initrd, and a ramfs providing /tmp for test file output.
+        Assumes ``ffi_test.elf`` was produced by ``./z build``.
         """
-        # Build the test binary (cross-compile via Docker/native toolchain).
-        self.run(*self._make_args("test-functional-build"), cwd=self.repo_root)
-
         ffi_test_elf = self.repo_root / "ffi_test.elf"
         if not ffi_test_elf.is_file():
             log.fatal(
-                "ffi_test.elf not found after build.",
+                "ffi_test.elf not found.",
                 code=EXIT_MISSING_DEP,
-                hint="Check test-functional-build output for errors.",
+                hint="Run `./z build` first.",
             )
 
         print("=== libffi functional tests ===")
@@ -327,8 +336,8 @@ class LibffiBuild(ZScript):
 
     def release(self) -> None:
         """Package the libffi release tarball and verify it."""
-        self.run(*self._make_args("package"), cwd=self.repo_root)
-        self.run(*self._make_args("verify-package"), cwd=self.repo_root)
+        self.run(*self._make_args("package"), cwd=self.repo_root, docker=False)
+        self.run(*self._make_args("verify-package"), cwd=self.repo_root, docker=False)
 
     def clean(self) -> None:
         """Remove build artifacts."""
@@ -338,6 +347,7 @@ class LibffiBuild(ZScript):
             "Makefile.nanvix",
             "clean",
             cwd=self.repo_root,
+            docker=False,
         )
 
 
