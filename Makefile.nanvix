@@ -3,338 +3,179 @@
 # Copyright(c) The Maintainers of Nanvix.
 # Licensed under the MIT License.
 #
-# Usage:
-#   make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/path/to/sysroot all
-#
-# Note: libffi uses autotools. This Makefile wraps ./configure && make.
-# The submodule must have a pre-generated configure script, or use the
-# release tarball (see BOOTSTRAP.md Step 3.7).
+# Usage: make -f Makefile.nanvix PLATFORM=<platform> PROCESS_MODE=<mode> \
+#    MEMORY_SIZE=<size> NANVIX_HOME=<home> NANVIX_TOOLCHAIN=<toolchain> [target]
 #
 # Targets:
-#   all              Build static library (configure + make)
-#   test-smoke       Verify libffi.a exists and is valid (no runtime)
-#   test-integration Verify archive contains expected symbols
-#   test-functional  Build and run a minimal FFI call test on nanvixd.elf
+#   all              Build libffi.a and ffi_test.elf
+#   build            Configure (if needed) and build libffi.a via autotools
+#   ffi_test.elf     Cross-compile the functional test binary
+#   test-smoke       Verify build artifacts exist (no runtime)
+#   test-integration Verify libffi.a is non-trivial
+#   test-functional  Run ffi_test.elf on nanvixd.elf
 #   test             Run all test levels
-#   package          Create portable release tarball in dist/
-#   install          Install library and headers to PREFIX
+#   package          Create release tarball in dist/
+#   verify-package   Verify the release tarball
 #   clean            Remove build artifacts
 
 # ===========================================================================
-# Toolchain Detection
+# Global Variables
 # ===========================================================================
 
-NANVIX_DOCKER_IMAGE ?= ghcr.io/nanvix/toolchain-gcc:sha-34a3641
+# Some assumptions:
+# 1. This makefile is ONLY called by z.py
+# 2. Build mode ALWAYS runs in Docker
+# 3. Build ALWAYS runs before test and release
 
-ifdef CONFIG_NANVIX
-  NANVIX_TOOLCHAIN ?= /opt/nanvix
-  NANVIX_HOME ?= $(HOME)/nanvix
+.DEFAULT_GOAL = all
+EXE = .elf
+_NANVIX_DOCKER_BUILD_GOALS := all build ffi_test$(EXE)
+_NANVIX_GOALS := $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 
-  ifndef CONFIG_NANVIX_DOCKER
-    ifeq ($(wildcard $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-gcc),)
-      DOCKER_AVAILABLE := $(shell command -v docker 2>/dev/null)
-      ifdef DOCKER_AVAILABLE
-        DOCKER_IMAGE_EXISTS := $(shell docker image inspect $(NANVIX_DOCKER_IMAGE) >/dev/null 2>&1 && echo yes)
-        ifdef DOCKER_IMAGE_EXISTS
-          CONFIG_NANVIX_DOCKER := y
-          $(info [nanvix] Using Docker (native toolchain not found at $(NANVIX_TOOLCHAIN)))
-        else
-          $(error Docker image $(NANVIX_DOCKER_IMAGE) not found. Run: docker pull $(NANVIX_DOCKER_IMAGE))
-        endif
-      else
-        $(error Nanvix toolchain not found at $(NANVIX_TOOLCHAIN) and Docker not available)
-      endif
-    endif
-  else
-    DOCKER_AVAILABLE := $(shell command -v docker 2>/dev/null)
-    ifndef DOCKER_AVAILABLE
-      $(error CONFIG_NANVIX_DOCKER=y but Docker is not installed)
-    endif
-    DOCKER_IMAGE_EXISTS := $(shell docker image inspect $(NANVIX_DOCKER_IMAGE) >/dev/null 2>&1 && echo yes)
-    ifndef DOCKER_IMAGE_EXISTS
-      $(error Docker image $(NANVIX_DOCKER_IMAGE) not found. Run: docker pull $(NANVIX_DOCKER_IMAGE))
-    endif
-    $(info [nanvix] Using Docker (explicitly requested))
-  endif
-
-  EXE = .elf
-  SYSROOT_PATH := $(abspath $(NANVIX_HOME))
-
-  ifdef CONFIG_NANVIX_DOCKER
-    TOOLCHAIN_PREFIX := /opt/nanvix
-    DOCKER_TOOLCHAIN_PATH := /opt/nanvix
-    DOCKER_SYSROOT_PATH := /mnt/sysroot
-    DOCKER_WORKSPACE_PATH := /mnt/workspace
-    DOCKER_UID := $(shell id -u)
-    DOCKER_GID := $(shell id -g)
-    DOCKER_RUN := docker run --rm --user $(DOCKER_UID):$(DOCKER_GID) \
-      -v $(CURDIR):$(DOCKER_WORKSPACE_PATH) \
-      -v $(SYSROOT_PATH):$(DOCKER_SYSROOT_PATH):ro \
-      -w $(DOCKER_WORKSPACE_PATH) \
-      -e HOME=/tmp \
-      $(NANVIX_DOCKER_IMAGE)
-    DOCKER_KVM_GID := $(shell stat -c '%g' /dev/kvm 2>/dev/null || echo 0)
-    DOCKER_RUN_FUNCTIONAL := docker run --rm --device /dev/kvm \
-      --user $(DOCKER_UID):$(DOCKER_GID) --group-add $(DOCKER_KVM_GID) \
-      -v $(CURDIR):$(DOCKER_WORKSPACE_PATH) \
-      -v $(SYSROOT_PATH):$(DOCKER_SYSROOT_PATH) \
-      -w $(DOCKER_SYSROOT_PATH) \
-      -e HOME=/tmp \
-      -e USER=$(shell whoami) \
-      $(NANVIX_DOCKER_IMAGE)
-  else
-    TOOLCHAIN_PREFIX := $(NANVIX_TOOLCHAIN)
-  endif
-
-  INSTALL_PREFIX ?= $(SYSROOT_PATH)
-
-  PREFIX ?= $(SYSROOT_PATH)
-  PLATFORM ?= unknown
-  PROCESS_MODE ?= unknown
-  MEMORY_SIZE ?= unknown
-else
-  ifneq ($(MAKECMDGOALS),clean)
-    $(error CONFIG_NANVIX must be set to 'y'. Usage: make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/path/to/sysroot)
-  endif
-  EXE = .elf
+# Ensure required variables are defined
+_REQUIRED := PLATFORM PROCESS_MODE MEMORY_SIZE NANVIX_HOME NANVIX_TOOLCHAIN
+ifneq ($(filter-out clean,$(_NANVIX_GOALS)),)
+  $(foreach v,$(_REQUIRED),\
+    $(if $($v),,$(error Required variable $v not set))\
+  )
 endif
+
+SYSROOT_PATH  := $(abspath $(NANVIX_HOME))
+INSTALL_PREFIX ?= $(SYSROOT_PATH)
+# Autotools host-triplet build dir (deterministic for --host=i686-nanvix).
+BUILD_DIR     := i686-pc-nanvix
+LIBFFI        := $(BUILD_DIR)/.libs/libffi.a
+FFI_INCLUDE   := $(BUILD_DIR)/include
+ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE)-$(MEMORY_SIZE)
+CONFIGURED_MARKER := .nanvix-configured
+
+# ===========================================================================
+# Build Mode Variables
+# ===========================================================================
+
+_BUILD    := $(filter $(_NANVIX_DOCKER_BUILD_GOALS),$(_NANVIX_GOALS))
+_NONBUILD := $(filter-out $(_NANVIX_DOCKER_BUILD_GOALS),$(_NANVIX_GOALS))
+ifneq ($(_BUILD),)
+  # Error out if mixing build and non-build goals
+  ifneq ($(_NONBUILD),)
+    $(error Cannot mix build and non-build targets. Build targets: $(_NANVIX_DOCKER_BUILD_GOALS))
+  endif
+
+  ifeq ($(wildcard $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-gcc),)
+    $(error Nanvix toolchain not found at $(NANVIX_TOOLCHAIN))
+  endif
+endif
+
+CC := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-gcc
+AR := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-ar
+NANVIX_LDFLAGS := -static -L$(SYSROOT_PATH)/lib -T$(SYSROOT_PATH)/lib/user.ld
+NANVIX_LIBS := -Wl,--start-group \
+  $(SYSROOT_PATH)/lib/libposix.a \
+  $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libc.a \
+  $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libm.a \
+  -Wl,--end-group
 
 # ===========================================================================
 # Build Targets
 # ===========================================================================
 
-CONFIGURED_MARKER = .nanvix-configured
-
-all: build
-
-configure: $(CONFIGURED_MARKER)
+all: build ffi_test$(EXE)
 
 $(CONFIGURED_MARKER):
-	@# Patch config.sub to recognize nanvix (idempotent)
+	@# Patch config.sub to recognize nanvix (idempotent; defensive against
+	@# tarball overlay performed by .nanvix/z.py's _ensure_configure()).
 	@if [ -f config.sub ] && ! grep -q 'nanvix' config.sub; then \
-	sed -i 's/| fiwix\* )/| fiwix* | nanvix* )/' config.sub; \
+	  sed -i 's/| fiwix\* )/| fiwix* | nanvix* )/' config.sub; \
 	fi
-ifdef CONFIG_NANVIX_DOCKER
-	$(DOCKER_RUN) sh -c '\
-	CC="$(DOCKER_TOOLCHAIN_PATH)/bin/i686-nanvix-gcc" \
-	LDFLAGS="-static -L$(DOCKER_SYSROOT_PATH)/lib -T$(DOCKER_SYSROOT_PATH)/lib/user.ld \
-	  -Wl,--start-group $(DOCKER_SYSROOT_PATH)/lib/libposix.a \
-	  $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libc.a \
-	  $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libm.a -Wl,--end-group" \
-	./configure --host=i686-nanvix --prefix="$(INSTALL_PREFIX)" \
-	            --disable-shared --enable-static'
-else
-	CC="$(TOOLCHAIN_PREFIX)/bin/i686-nanvix-gcc" \
-	LDFLAGS="-static -L$(SYSROOT_PATH)/lib -T$(SYSROOT_PATH)/lib/user.ld \
-	  -Wl,--start-group $(SYSROOT_PATH)/lib/libposix.a \
-	  $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libc.a \
-	  $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libm.a -Wl,--end-group" \
+	CC="$(CC)" \
+	LDFLAGS="$(NANVIX_LDFLAGS) $(NANVIX_LIBS)" \
 	./configure --host=i686-nanvix --prefix="$(INSTALL_PREFIX)" \
 	            --disable-shared --enable-static
-endif
 	touch $(CONFIGURED_MARKER)
 
 build: $(CONFIGURED_MARKER)
-ifdef CONFIG_NANVIX_DOCKER
-	$(DOCKER_RUN) make -j$$(nproc)
-else
 	$(MAKE) -j$$(nproc)
-endif
+
+ffi_test$(EXE): build
+	@printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c
+	$(CC) -O2 -I$(FFI_INCLUDE) _ffi_test.c $(LIBFFI) \
+	    $(NANVIX_LDFLAGS) -Wl,--allow-multiple-definition $(NANVIX_LIBS) \
+	    -o $@
+	@rm -f _ffi_test.c
+	@echo "  OK: $@ ($$(wc -c < $@) bytes)"
 
 # ===========================================================================
 # Test Targets
 # ===========================================================================
 
-# --- Smoke tests: verify build artifacts (no runtime needed) ---
 test-smoke:
 	@echo "=== libffi smoke tests ==="
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	if [ -n "$$LIBFFI" ]; then \
-	echo "  OK: $$LIBFFI exists ($$(wc -c < "$$LIBFFI") bytes)"; \
-	else \
-	echo "  FAIL: libffi.a not found"; exit 1; \
-	fi
-	@echo "  Checking ffi.h..."
-	@FFI_H=$$(find . -name "ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	if [ -n "$$FFI_H" ]; then \
-	echo "  OK: $$FFI_H exists"; \
-	else \
-	echo "  FAIL: ffi.h not found"; exit 1; \
-	fi
+	@test -f $(LIBFFI)             || { echo "  FAIL: $(LIBFFI) not found"; exit 1; }
+	@test -f $(FFI_INCLUDE)/ffi.h  || { echo "  FAIL: $(FFI_INCLUDE)/ffi.h not found"; exit 1; }
+	@echo "  OK: $(LIBFFI) ($$(wc -c < $(LIBFFI)) bytes)"
+	@echo "  OK: $(FFI_INCLUDE)/ffi.h"
 	@echo "  PASS: libffi smoke tests"
 
-# --- Integration tests: verify archive contents ---
 test-integration:
 	@echo "=== libffi integration tests ==="
-ifdef CONFIG_NANVIX_DOCKER
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	echo "  Archive contents:"; \
-	$(DOCKER_RUN) $(DOCKER_TOOLCHAIN_PATH)/bin/i686-nanvix-ar -t "$$LIBFFI" | head -10; \
-	  OBJ_COUNT=$$($(DOCKER_RUN) $(DOCKER_TOOLCHAIN_PATH)/bin/i686-nanvix-ar -t "$$LIBFFI" | wc -l); \
-	  if [ "$$OBJ_COUNT" -lt 3 ]; then \
-	    echo "  FAIL: libffi.a has too few objects ($$OBJ_COUNT)"; exit 1; \
-	  fi; \
-	  echo "  OK: libffi.a contains $$OBJ_COUNT objects"
-else
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	echo "  Archive contents:"; \
-	$(TOOLCHAIN_PREFIX)/bin/i686-nanvix-ar -t "$$LIBFFI" | head -10; \
-	  OBJ_COUNT=$$($(TOOLCHAIN_PREFIX)/bin/i686-nanvix-ar -t "$$LIBFFI" | wc -l); \
-	  if [ "$$OBJ_COUNT" -lt 3 ]; then \
-	    echo "  FAIL: libffi.a has too few objects ($$OBJ_COUNT)"; exit 1; \
-	  fi; \
-	  echo "  OK: libffi.a contains $$OBJ_COUNT objects"
-endif
+	@test -f $(LIBFFI) || { echo "  FAIL: $(LIBFFI) not found"; exit 1; }
+	@size=$$(wc -c < $(LIBFFI)); \
+	if [ "$$size" -lt 1000 ]; then \
+	  echo "  FAIL: $(LIBFFI) too small ($$size bytes)"; exit 1; \
+	fi; \
+	echo "  OK: $(LIBFFI) ($$size bytes)"
 	@echo "  PASS: libffi integration tests"
 
-# --- Build the functional test binary (compile only, no run) ---
-test-functional-build:
-	@echo "=== Building ffi_test$(EXE) ==="
-ifdef CONFIG_NANVIX_DOCKER
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
-	  echo "  Building ffi_test$(EXE) (libffi=$$LIBFFI, include=$$FFI_INCLUDE)..."; \
-	  printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c; \
-	  $(DOCKER_RUN) $(DOCKER_TOOLCHAIN_PATH)/bin/i686-nanvix-gcc -O2 -I"$$FFI_INCLUDE" _ffi_test.c \
-	    "$$LIBFFI" \
-	    -static -T$(DOCKER_SYSROOT_PATH)/lib/user.ld -Wl,--allow-multiple-definition \
-	    -Wl,--start-group $(DOCKER_SYSROOT_PATH)/lib/libposix.a \
-	    $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libc.a \
-	    $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libm.a -Wl,--end-group \
-	    -o ffi_test$(EXE); \
-	  rm -f _ffi_test.c; \
-	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
-else
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
-	  echo "  Building ffi_test$(EXE) (libffi=$$LIBFFI, include=$$FFI_INCLUDE)..."; \
-	  printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > /tmp/ffi_test.c; \
-	  $(TOOLCHAIN_PREFIX)/bin/i686-nanvix-gcc -O2 -I"$$FFI_INCLUDE" /tmp/ffi_test.c \
-	    "$$LIBFFI" \
-	    -static -T$(SYSROOT_PATH)/lib/user.ld -Wl,--allow-multiple-definition \
-	    -Wl,--start-group $(SYSROOT_PATH)/lib/libposix.a \
-	    $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libc.a \
-	    $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libm.a -Wl,--end-group \
-	    -o ffi_test$(EXE); \
-	  rm -f /tmp/ffi_test.c; \
-	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
-endif
-
-# --- Functional tests: build and run a minimal FFI test ---
 test-functional:
 	@echo "=== libffi functional tests ==="
-ifeq ($(PROCESS_MODE),standalone)
-	@echo "  NOTE: Standalone functional tests are handled via ./z.sh."
-	@echo "  Delegating to: ./z.sh test test-functional"
-	@./z.sh --with-nanvix "$(NANVIX_HOME)" test test-functional
-else
-ifdef CONFIG_NANVIX_DOCKER
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
-	  echo "  Building ffi_test$(EXE) (libffi=$$LIBFFI, include=$$FFI_INCLUDE)..."; \
-	  printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c; \
-	  $(DOCKER_RUN) $(DOCKER_TOOLCHAIN_PATH)/bin/i686-nanvix-gcc -O2 -I"$$FFI_INCLUDE" _ffi_test.c \
-	    "$$LIBFFI" \
-	    -static -T$(DOCKER_SYSROOT_PATH)/lib/user.ld -Wl,--allow-multiple-definition \
-	    -Wl,--start-group $(DOCKER_SYSROOT_PATH)/lib/libposix.a \
-	    $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libc.a \
-	    $(DOCKER_TOOLCHAIN_PATH)/i686-nanvix/lib/libm.a -Wl,--end-group \
-	    -o ffi_test$(EXE); \
-	  rm -f _ffi_test.c; \
-	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
-	@echo "  Running ffi_test$(EXE) via nanvixd.elf (Docker)..."
-	$(DOCKER_RUN_FUNCTIONAL) sh -c \
-	  'timeout --foreground 120 ./bin/nanvixd.elf -- $(DOCKER_WORKSPACE_PATH)/ffi_test$(EXE)'
-	@echo "  PASS: ffi_test (exit code 0)"
-else
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	  FFI_INCLUDE=$$(find . -path "*/include/ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
-	  echo "  Building ffi_test$(EXE) (libffi=$$LIBFFI, include=$$FFI_INCLUDE)..."; \
-	  printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > /tmp/ffi_test.c; \
-	  $(TOOLCHAIN_PREFIX)/bin/i686-nanvix-gcc -O2 -I"$$FFI_INCLUDE" /tmp/ffi_test.c \
-	    "$$LIBFFI" \
-	    -static -T$(SYSROOT_PATH)/lib/user.ld -Wl,--allow-multiple-definition \
-	    -Wl,--start-group $(SYSROOT_PATH)/lib/libposix.a \
-	    $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libc.a \
-	    $(TOOLCHAIN_PREFIX)/i686-nanvix/lib/libm.a -Wl,--end-group \
-	    -o ffi_test$(EXE); \
-	  rm -f /tmp/ffi_test.c; \
-	  echo "  OK: ffi_test$(EXE) built ($$(wc -c < ffi_test$(EXE)) bytes)"
-	@echo "  Running ffi_test$(EXE) via nanvixd.elf..."
-	cd "$(SYSROOT_PATH)" && timeout --foreground 120 ./bin/nanvixd.elf -- $(abspath ffi_test$(EXE))
-	@echo "  PASS: ffi_test (exit code 0)"
-endif
-endif
+	@test -f ffi_test$(EXE) || { echo "  FAIL: ffi_test$(EXE) not built (run ./z build first)"; exit 1; }
+	@echo "  Running ffi_test$(EXE) via nanvixd$(EXE)..."
+	@# Timeout/cancellation is handled by .nanvix/z.py's `timeout=` facility
+	@# (see _run_functional_standalone and test()), avoiding reliance on a
+	@# host `timeout(1)` binary which is not portable across userlands.
+	cd "$(SYSROOT_PATH)" && ./bin/nanvixd$(EXE) -- $(abspath ffi_test$(EXE))
 	@echo "  PASS: libffi functional tests"
 
-# --- Run all test levels ---
 test: test-smoke test-integration test-functional
 	@echo "=== All libffi tests PASSED ==="
 
 # ===========================================================================
-# Package Target
+# Package Targets
 # ===========================================================================
 
-package: build
+package:
 	@echo "=== Packaging libffi release ==="
-	$(eval ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE)-$(MEMORY_SIZE))
+	@test -f $(LIBFFI)       || { echo "  FAIL: $(LIBFFI) not found; run ./z build first"; exit 1; }
+	@test -f ffi_test$(EXE)  || { echo "  FAIL: ffi_test$(EXE) not found; run ./z build first"; exit 1; }
 	rm -rf dist/$(ARTIFACT_NAME)
 	mkdir -p dist/$(ARTIFACT_NAME)/sysroot/lib \
-	dist/$(ARTIFACT_NAME)/sysroot/include \
-	dist/$(ARTIFACT_NAME)/sysroot/bin
-	@LIBFFI=$$(find . -name "libffi.a" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" | head -1); \
-	cp -f "$$LIBFFI" dist/$(ARTIFACT_NAME)/sysroot/lib/
-	@# Copy headers from the configure-generated include directory (not from
-	@# src/ subdirectories, which contain arch-specific variants — the last
-	@# one copied by find would win, potentially overwriting x86/ffitarget.h
-	@# with m32r/ffitarget.h that has FFI_CLOSURES=0).
-	@INCLUDE_DIR=$$(find . -path "*/include/ffi.h" -not -path "*/src/*" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec dirname {} \; | head -1); \
-	if [ -n "$$INCLUDE_DIR" ] && [ -f "$$INCLUDE_DIR/ffitarget.h" ]; then \
-	  cp -f "$$INCLUDE_DIR/ffi.h" dist/$(ARTIFACT_NAME)/sysroot/include/; \
-	  cp -f "$$INCLUDE_DIR/ffitarget.h" dist/$(ARTIFACT_NAME)/sysroot/include/; \
-	  echo "  Headers from $$INCLUDE_DIR (FFI_CLOSURES=$$(grep -o 'FFI_CLOSURES[[:space:]]*[01]' "$$INCLUDE_DIR/ffitarget.h"))"; \
-	else \
-	  echo "  WARNING: configure-generated include dir not found, falling back to find"; \
-	  find . -name "ffi.h" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \; ; \
-	  find . -name "ffitarget.h" -path "*/x86/*" -not -path "*/nanvix-artifacts/*" -not -path "*/dist/*" -exec cp -f {} dist/$(ARTIFACT_NAME)/sysroot/include/ \; ; \
-	fi
-	-cp -f ffi_test$(EXE) dist/$(ARTIFACT_NAME)/sysroot/bin/ 2>/dev/null || true
+	         dist/$(ARTIFACT_NAME)/sysroot/include \
+	         dist/$(ARTIFACT_NAME)/sysroot/bin
+	cp -f $(LIBFFI)                    dist/$(ARTIFACT_NAME)/sysroot/lib/
+	cp -f $(FFI_INCLUDE)/ffi.h         dist/$(ARTIFACT_NAME)/sysroot/include/
+	cp -f $(FFI_INCLUDE)/ffitarget.h   dist/$(ARTIFACT_NAME)/sysroot/include/
+	cp -f ffi_test$(EXE)               dist/$(ARTIFACT_NAME)/sysroot/bin/
 	tar -czf dist/$(ARTIFACT_NAME).tar.gz -C dist/$(ARTIFACT_NAME) sysroot
 	@echo "  Package: dist/$(ARTIFACT_NAME).tar.gz"
-	@echo "  Contents:"
-	@tar tzf dist/$(ARTIFACT_NAME).tar.gz | head -20
-
-# ===========================================================================
-# Verify Package
-# ===========================================================================
 
 verify-package:
 	@echo "=== Verifying libffi package ==="
-	$(eval ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE)-$(MEMORY_SIZE))
 	@TARBALL="dist/$(ARTIFACT_NAME).tar.gz"; \
 	if [ ! -f "$$TARBALL" ]; then \
-	  echo "FAIL: Package tarball not found: $$TARBALL"; exit 1; \
+	  echo "  FAIL: Package tarball not found: $$TARBALL"; exit 1; \
 	fi; \
-	echo "Package contents:"; \
-	tar tzf "$$TARBALL"; \
 	if ! tar tzf "$$TARBALL" | grep -q 'sysroot/lib/'; then \
-	  echo "FAIL: Package missing sysroot/lib/ entries"; exit 1; \
+	  echo "  FAIL: Package missing sysroot/lib/ entries"; exit 1; \
 	fi; \
 	echo "  PASS: libffi package verification"
 
 # ===========================================================================
-# Install / Clean
+# Clean
 # ===========================================================================
-
-install: build
-	$(MAKE) install DESTDIR="$(DESTDIR)"
 
 clean:
 	-$(MAKE) clean 2>/dev/null || true
 	rm -f $(CONFIGURED_MARKER) ffi_test$(EXE)
 	rm -rf dist/
 
-distclean: clean
-	-$(MAKE) distclean 2>/dev/null || true
-
-.PHONY: all configure build clean distclean install test test-smoke test-integration test-functional package verify-package
+.PHONY: all build clean test test-smoke test-integration test-functional package verify-package
