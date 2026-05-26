@@ -138,7 +138,7 @@ docker pull ghcr.io/nanvix/toolchain-libffi:latest
 make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/path/to/nanvix/sysroot-debug
 ```
 
-> **Note:** The sysroot (`NANVIX_HOME`) must contain `lib/libposix.a` and `lib/user.ld` from a Nanvix build. The libffi source tree must also have a pre-generated `configure` script (use the release tarball if building from a git checkout).
+> **Note:** The sysroot (`NANVIX_HOME`) must contain `lib/libposix.a` and `lib/user.ld` from a Nanvix build. The autotools build system (`configure`, `Makefile.in`, etc.) is regenerated automatically via `autoreconf` inside the Docker toolchain image, so a git checkout is sufficient — no release tarball is required.
 
 **Docker Fallback Behavior:**
 - If `NANVIX_TOOLCHAIN` points to a valid toolchain, it uses the native compiler
