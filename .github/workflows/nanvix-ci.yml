@@ -35,7 +35,7 @@ jobs:
       skip-full-test-modes: "[]"
       caller-event-name: ${{ github.event_name }}
       windows-test: true
-      docker-image: "ghcr.io/nanvix/toolchain-libffi:latest" # yamllint disable-line rule:line-length
+      docker-image: "ghcr.io/nanvix/toolchain-libffi:sha-fce3172" # yamllint disable-line rule:line-length
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
@@ -51,7 +51,7 @@ jobs:
       skip-full-test-modes: "[]"
       caller-event-name: "schedule"
       windows-test: true
-      docker-image: "ghcr.io/nanvix/toolchain-libffi:latest" # yamllint disable-line rule:line-length
+      docker-image: "ghcr.io/nanvix/toolchain-libffi:sha-fce3172" # yamllint disable-line rule:line-length
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
