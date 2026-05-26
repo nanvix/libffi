@@ -81,9 +81,18 @@ NANVIX_LIBS := -Wl,--start-group \
 
 all: build ffi_test$(EXE)
 
-$(CONFIGURED_MARKER):
-	@# Patch config.sub to recognize nanvix (idempotent; defensive against
-	@# tarball overlay performed by .nanvix/z.py's _ensure_configure()).
+# Regenerate the autotools build system from configure.ac / Makefile.am.
+# Runs inside the Docker toolchain image (which provides autoconf,
+# automake, and libtool), so no autotools install is required on the
+# host.  Re-runs only when the autotools inputs change.
+configure: configure.ac Makefile.am acinclude.m4 $(wildcard m4/*.m4)
+	autoreconf -v -i -f
+	@test -f configure
+
+$(CONFIGURED_MARKER): configure
+	@# Patch config.sub to recognize nanvix (idempotent; defends against
+	@# autoreconf -i replacing it with an upstream copy from automake's
+	@# data dir).
 	@if [ -f config.sub ] && ! grep -q 'nanvix' config.sub; then \
 	  sed -i 's/| fiwix\* )/| fiwix* | nanvix* )/' config.sub; \
 	fi

@@ -61,7 +61,7 @@ Or build directly with Make (advanced):
 
 ```bash
 # 1. Pull the Docker image
-docker pull ghcr.io/nanvix/toolchain-gcc:sha-34a3641
+docker pull ghcr.io/nanvix/toolchain-libffi:latest
 
 # 2. Download Nanvix sysroot
 curl -fsSL https://raw.githubusercontent.com/nanvix/nanvix/refs/heads/dev/scripts/get-nanvix.sh | bash -s -- nanvix-artifacts
@@ -132,19 +132,19 @@ The Makefile supports automatic Docker fallback when the native toolchain is not
 
 ```bash
 # Pull the Nanvix toolchain Docker image
-docker pull ghcr.io/nanvix/toolchain-gcc:sha-34a3641
+docker pull ghcr.io/nanvix/toolchain-libffi:latest
 
 # Build (Docker is used automatically if native toolchain is not found)
 make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/path/to/nanvix/sysroot-debug
 ```
 
-> **Note:** The sysroot (`NANVIX_HOME`) must contain `lib/libposix.a` and `lib/user.ld` from a Nanvix build. The libffi source tree must also have a pre-generated `configure` script (use the release tarball if building from a git checkout).
+> **Note:** The sysroot (`NANVIX_HOME`) must contain `lib/libposix.a` and `lib/user.ld` from a Nanvix build. The autotools build system (`configure`, `Makefile.in`, etc.) is regenerated automatically via `autoreconf` inside the Docker toolchain image, so a git checkout is sufficient — no release tarball is required.
 
 **Docker Fallback Behavior:**
 - If `NANVIX_TOOLCHAIN` points to a valid toolchain, it uses the native compiler
 - If the native toolchain is not found, it automatically uses Docker if available
 - Use `CONFIG_NANVIX_DOCKER=y` to force Docker usage even when native toolchain exists
-- Use `NANVIX_DOCKER_IMAGE` to specify a custom Docker image (default: `ghcr.io/nanvix/toolchain-gcc:sha-34a3641`)
+- Use `NANVIX_DOCKER_IMAGE` to specify a custom Docker image (default: `ghcr.io/nanvix/toolchain-libffi:latest`)
 
 ### Using Native Toolchain
 
