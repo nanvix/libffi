@@ -87,7 +87,7 @@ all: build ffi_test$(EXE)
 # host.  Re-runs only when the autotools inputs change.
 configure: configure.ac Makefile.am acinclude.m4 $(wildcard m4/*.m4)
 	autoreconf -v -i -f
-	@touch configure
+	@test -f configure
 
 $(CONFIGURED_MARKER): configure
 	@# Patch config.sub to recognize nanvix (idempotent; defends against
