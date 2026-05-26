@@ -14,11 +14,8 @@ Usage:
 
 import shutil
 import sys
-import tarfile
 import tempfile
-import urllib.request
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from nanvix_zutil import (
     CFG_SYSROOT,
@@ -36,12 +33,6 @@ _MAKE_VAR_TOOLCHAIN = "NANVIX_TOOLCHAIN"
 _MAKE_VAR_PLATFORM = "PLATFORM"
 _MAKE_VAR_PROCESS_MODE = "PROCESS_MODE"
 _MAKE_VAR_MEMORY_SIZE = "MEMORY_SIZE"
-
-_LIBFFI_VERSION = "3.4.6"
-_LIBFFI_TARBALL_URL = (
-    f"https://github.com/libffi/libffi/releases/download/v{_LIBFFI_VERSION}/"
-    f"libffi-{_LIBFFI_VERSION}.tar.gz"
-)
 
 
 IS_WINDOWS = sys.platform == "win32"
@@ -83,40 +74,15 @@ class LibffiBuild(ZScript):
         args.extend(targets)
         return args
 
-    def _ensure_configure(self) -> None:
-        """Download the release tarball if ``./configure`` is missing.
-
-        Git checkouts of libffi do not include the autotools-generated
-        ``configure`` script.  When it is absent we fetch the official
-        release tarball and overlay it onto the working tree.
-        """
-        configure = self.repo_root / "configure"
-        if configure.exists():
-            return
-
-        log.info("configure script not found — downloading release tarball")
-        with TemporaryDirectory() as tmp:
-            tarball = Path(tmp) / f"libffi-{_LIBFFI_VERSION}.tar.gz"
-            urllib.request.urlretrieve(_LIBFFI_TARBALL_URL, tarball)
-            with tarfile.open(tarball, "r:gz") as tf:
-                if sys.version_info >= (3, 12):
-                    tf.extractall(tmp, filter="data")
-                else:
-                    tf.extractall(tmp)  # noqa: S202
-            extracted = Path(tmp) / f"libffi-{_LIBFFI_VERSION}"
-            for item in extracted.iterdir():
-                dest = self.repo_root / item.name
-                if item.is_dir():
-                    shutil.copytree(item, dest, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, dest)
-        log.info("configure script ready")
-
     def setup(self) -> bool:
-        """Download the Nanvix sysroot and prepare autotools sources."""
-        ok = super().setup()
-        self._ensure_configure()
-        return ok
+        """Download the Nanvix sysroot.
+
+        The autotools build system (``configure``, ``Makefile.in``, ...)
+        is regenerated on demand by ``Makefile.nanvix`` inside the Docker
+        toolchain image (see the ``configure`` target there).  No
+        host-side autotools install is required.
+        """
+        return super().setup()
 
     def build(self) -> None:
         """Cross-compile libffi.a and ffi_test.elf for Nanvix.
