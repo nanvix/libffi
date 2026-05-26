@@ -21,11 +21,27 @@ from nanvix_zutil import (
     CFG_SYSROOT,
     EXIT_MISSING_DEP,
     TOOLCHAIN_CONTAINER_PATH,
+    DockerConfig,
     ZScript,
     log,
     make_initrd,
     run,
 )
+
+# Build artifacts produced inside the Docker container that must be
+# copied back to the host workspace.  Required on Windows where the
+# build runs in a container-local directory (``/tmp/build``) instead of
+# the mounted workspace; without this list, ``ffi_test.elf`` would be
+# unreachable to the native test runner and the package step would not
+# see ``libffi.a`` / headers on the host filesystem.  Paths are relative
+# to the container build dir.
+_BUILD_DIR = "i686-pc-nanvix"
+_OUTPUT_FILES = [
+    "ffi_test.elf",
+    f"{_BUILD_DIR}/.libs/libffi.a",
+    f"{_BUILD_DIR}/include/ffi.h",
+    f"{_BUILD_DIR}/include/ffitarget.h",
+]
 
 # Makefile variable names (build-system-specific).
 _MAKE_VAR_HOME = "NANVIX_HOME"
@@ -40,6 +56,18 @@ IS_WINDOWS = sys.platform == "win32"
 
 class LibffiBuild(ZScript):
     """Build script for nanvix/libffi."""
+
+    def docker_config(self, image: str) -> DockerConfig:
+        """Extend the default Docker config with build output copy-back.
+
+        On Windows the build runs in a container-local directory to avoid
+        the slow mounted-workspace I/O penalty.  ``output_files`` tells
+        ``nanvix_zutil`` which artifacts to copy back to the host after
+        the build so subsequent test / package steps can find them.
+        """
+        cfg = super().docker_config(image)
+        cfg.output_files = list(_OUTPUT_FILES)
+        return cfg
 
     def _make_args(self, *targets: str) -> list[str]:
         """Build the common make argument list."""
