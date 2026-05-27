@@ -175,8 +175,8 @@ After a successful build, you will have:
 # Run all tests
 ./z test
 
-# Or run specific test targets
-./z test -- test-smoke test-integration
+# Or run a specific test target
+./z test -- test-functional
 ```
 
 Alternatively, invoke Make directly:
@@ -189,10 +189,8 @@ make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/path/to/nanvix test
 
 | Target | Description |
 |--------|-------------|
-| `test-smoke` | Verifies `libffi.a` exists and `ffi.h` is present (no runtime) |
-| `test-integration` | Verifies the archive contains expected object files |
 | `test-functional` | Builds and runs a minimal FFI call test via `nanvixd.elf` |
-| `test` | Runs all test levels sequentially |
+| `test` | Runs the functional test suite |
 
 ---
 

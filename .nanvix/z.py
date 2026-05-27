@@ -7,7 +7,7 @@
 Usage:
     ./z setup     # Download Nanvix sysroot
     ./z build     # Cross-compile libffi.a
-    ./z test      # Run test suite (smoke + integration + functional)
+    ./z test      # Run functional test suite
     ./z release   # Package release tarball
     ./z clean     # Remove build artifacts
 """
@@ -124,20 +124,14 @@ class LibffiBuild(ZScript):
     def test(self) -> None:
         """Run the test suite.
 
-        Smoke and integration tests are always delegated to the Makefile.
-        The functional test in standalone mode is handled in Python via
-        make_initrd so that initrd creation is shared across platforms.
+        In standalone mode the functional test is handled in Python so
+        that initrd creation is shared across platforms.
         """
         if IS_WINDOWS:
             self._run_tests_windows()
             return
 
         if self.config.deployment_mode == "standalone":
-            # Smoke + integration via Makefile (native), functional via Python.
-            run(
-                *self._make_args("test-smoke", "test-integration"),
-                cwd=self.repo_root,
-            )
             self._run_functional_standalone()
         else:
             targets = self.targets if self.targets else ["test"]

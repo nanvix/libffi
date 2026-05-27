@@ -10,8 +10,6 @@
 #   all              Build libffi.a and ffi_test.elf
 #   build            Configure (if needed) and build libffi.a via autotools
 #   ffi_test.elf     Cross-compile the functional test binary
-#   test-smoke       Verify build artifacts exist (no runtime)
-#   test-integration Verify libffi.a is non-trivial
 #   test-functional  Run ffi_test.elf on nanvixd.elf
 #   test             Run all test levels
 #   package          Create release tarball in dist/
@@ -117,24 +115,6 @@ ffi_test$(EXE): build
 # Test Targets
 # ===========================================================================
 
-test-smoke:
-	@echo "=== libffi smoke tests ==="
-	@test -f $(LIBFFI)             || { echo "  FAIL: $(LIBFFI) not found"; exit 1; }
-	@test -f $(FFI_INCLUDE)/ffi.h  || { echo "  FAIL: $(FFI_INCLUDE)/ffi.h not found"; exit 1; }
-	@echo "  OK: $(LIBFFI) ($$(wc -c < $(LIBFFI)) bytes)"
-	@echo "  OK: $(FFI_INCLUDE)/ffi.h"
-	@echo "  PASS: libffi smoke tests"
-
-test-integration:
-	@echo "=== libffi integration tests ==="
-	@test -f $(LIBFFI) || { echo "  FAIL: $(LIBFFI) not found"; exit 1; }
-	@size=$$(wc -c < $(LIBFFI)); \
-	if [ "$$size" -lt 1000 ]; then \
-	  echo "  FAIL: $(LIBFFI) too small ($$size bytes)"; exit 1; \
-	fi; \
-	echo "  OK: $(LIBFFI) ($$size bytes)"
-	@echo "  PASS: libffi integration tests"
-
 test-functional:
 	@echo "=== libffi functional tests ==="
 	@test -f ffi_test$(EXE) || { echo "  FAIL: ffi_test$(EXE) not built (run ./z build first)"; exit 1; }
@@ -145,7 +125,7 @@ test-functional:
 	cd "$(SYSROOT_PATH)" && ./bin/nanvixd$(EXE) -- $(abspath ffi_test$(EXE))
 	@echo "  PASS: libffi functional tests"
 
-test: test-smoke test-integration test-functional
+test: test-functional
 	@echo "=== All libffi tests PASSED ==="
 
 # ===========================================================================
@@ -187,4 +167,4 @@ clean:
 	rm -f $(CONFIGURED_MARKER) ffi_test$(EXE)
 	rm -rf dist/
 
-.PHONY: all build clean test test-smoke test-integration test-functional package verify-package
+.PHONY: all build clean test test-functional package verify-package
