@@ -94,9 +94,22 @@ $(CONFIGURED_MARKER): configure
 	@if [ -f config.sub ] && ! grep -q 'nanvix' config.sub; then \
 	  sed -i 's/| fiwix\* )/| fiwix* | nanvix* )/' config.sub; \
 	fi
+	@# Force cross-compile mode and pre-seed sizeof cache vars.
+	@# The Docker host can sometimes execute i686-nanvix-gcc output (32-bit
+	@# ELF runs transparently on x86_64 Linux), which fools autoconf into
+	@# thinking we are not cross-compiling and causes AC_CHECK_SIZEOF to
+	@# return empty values.  An empty ac_cv_sizeof_size_t then makes
+	@# configure.host fall through to TARGET=X86_64, pulling in 64-bit
+	@# sources for a 32-bit build and producing undefined references to
+	@# ffi_prep_cif_machdep / ffi_prep_closure_loc at link time.
 	CC="$(CC)" \
 	LDFLAGS="$(NANVIX_LDFLAGS) $(NANVIX_LIBS)" \
-	./configure --host=i686-nanvix --prefix="$(INSTALL_PREFIX)" \
+	cross_compiling=yes \
+	ac_cv_sizeof_size_t=4 \
+	ac_cv_sizeof_double=8 \
+	ac_cv_sizeof_long_double=12 \
+	./configure --host=i686-nanvix --build=x86_64-pc-linux-gnu \
+	            --prefix="$(INSTALL_PREFIX)" \
 	            --disable-shared --enable-static
 	touch $(CONFIGURED_MARKER)
 
