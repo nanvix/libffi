@@ -6,7 +6,7 @@
 
 Usage:
     ./z setup     # Download Nanvix sysroot
-    ./z build     # Cross-compile libffi.a
+    ./z build     # Cross-compile libffi.a + libffi.so
     ./z test      # Run functional test suite
     ./z release   # Package release tarball
     ./z clean     # Remove build artifacts
@@ -60,6 +60,7 @@ def _staged_output_files() -> list[str]:
     root = repo_root()
     return [
         str((lib_out() / "libffi.a").relative_to(root)),
+        str((lib_out() / "libffi.so").relative_to(root)),
         str((include_out() / "ffi.h").relative_to(root)),
         str((include_out() / "ffitarget.h").relative_to(root)),
         str((test_out() / "ffi_test.elf").relative_to(root)),
@@ -145,7 +146,7 @@ class LibffiBuild(ZScript):
         return super().setup()
 
     def build(self) -> None:
-        """Cross-compile libffi.a and ffi_test.elf for Nanvix.
+        """Cross-compile libffi.a + libffi.so and ffi_test.elf for Nanvix.
 
         Both the library and the functional-test binary are produced
         here, where Docker is available. The test step then just runs
