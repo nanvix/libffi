@@ -7,13 +7,12 @@
 #    MEMORY_SIZE=<size> NANVIX_HOME=<home> NANVIX_TOOLCHAIN=<toolchain> [target]
 #
 # Targets:
-#   all              Build libffi.a and ffi_test.elf
+#   all              Build libffi.a, ffi_test.elf, then stage via install
 #   build            Configure (if needed) and build libffi.a via autotools
 #   ffi_test.elf     Cross-compile the functional test binary
+#   install          Stage built artifacts into LIB_OUT/INCLUDE_OUT/TEST_OUT
 #   test-functional  Run ffi_test.elf on nanvixd.elf
 #   test             Run all test levels
-#   package          Create release tarball in dist/
-#   verify-package   Verify the release tarball
 #   clean            Remove build artifacts
 
 # ===========================================================================
@@ -27,11 +26,21 @@
 
 .DEFAULT_GOAL = all
 EXE = .elf
-_NANVIX_DOCKER_BUILD_GOALS := all build ffi_test$(EXE)
+_NANVIX_DOCKER_BUILD_GOALS := all build install ffi_test$(EXE)
 _NANVIX_GOALS := $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 
 # Ensure required variables are defined
-_REQUIRED := PLATFORM PROCESS_MODE MEMORY_SIZE NANVIX_HOME NANVIX_TOOLCHAIN
+_REQUIRED := PLATFORM \
+    PROCESS_MODE \
+    MEMORY_SIZE \
+    NANVIX_HOME \
+    NANVIX_TOOLCHAIN \
+    NANVIX_ROOT \
+    OUT_DIR \
+    DIST_DIR \
+    LIB_OUT \
+    INCLUDE_OUT \
+    TEST_OUT
 ifneq ($(filter-out clean,$(_NANVIX_GOALS)),)
   $(foreach v,$(_REQUIRED),\
     $(if $($v),,$(error Required variable $v not set))\
@@ -44,7 +53,9 @@ INSTALL_PREFIX ?= $(SYSROOT_PATH)
 BUILD_DIR     := i686-pc-nanvix
 LIBFFI        := $(BUILD_DIR)/.libs/libffi.a
 FFI_INCLUDE   := $(BUILD_DIR)/include
-ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE)-$(MEMORY_SIZE)
+LIB_ARTIFACTS     := $(LIBFFI)
+INCLUDE_ARTIFACTS := $(FFI_INCLUDE)/ffi.h $(FFI_INCLUDE)/ffitarget.h
+TEST_ARTIFACTS    := ffi_test$(EXE)
 CONFIGURED_MARKER := .nanvix-configured
 
 # ===========================================================================
@@ -77,7 +88,15 @@ NANVIX_LIBS := -Wl,--start-group \
 # Build Targets
 # ===========================================================================
 
-all: build ffi_test$(EXE)
+all: build ffi_test$(EXE) install
+
+# Stage built artifacts into the release/test output tree so that
+# `./z release` (which packages release_dir()) can find them.
+install: build ffi_test$(EXE)
+	@mkdir -p $(LIB_OUT) $(INCLUDE_OUT) $(TEST_OUT)
+	cp -f $(LIB_ARTIFACTS)     $(LIB_OUT)/
+	cp -f $(INCLUDE_ARTIFACTS) $(INCLUDE_OUT)/
+	cp -f $(TEST_ARTIFACTS)    $(TEST_OUT)/
 
 # Regenerate the autotools build system from configure.ac / Makefile.am.
 # Runs inside the Docker toolchain image (which provides autoconf,
@@ -142,42 +161,12 @@ test: test-functional
 	@echo "=== All libffi tests PASSED ==="
 
 # ===========================================================================
-# Package Targets
-# ===========================================================================
-
-package:
-	@echo "=== Packaging libffi release ==="
-	@test -f $(LIBFFI)       || { echo "  FAIL: $(LIBFFI) not found; run ./z build first"; exit 1; }
-	@test -f ffi_test$(EXE)  || { echo "  FAIL: ffi_test$(EXE) not found; run ./z build first"; exit 1; }
-	rm -rf dist/$(ARTIFACT_NAME)
-	mkdir -p dist/$(ARTIFACT_NAME)/sysroot/lib \
-	         dist/$(ARTIFACT_NAME)/sysroot/include \
-	         dist/$(ARTIFACT_NAME)/sysroot/bin
-	cp -f $(LIBFFI)                    dist/$(ARTIFACT_NAME)/sysroot/lib/
-	cp -f $(FFI_INCLUDE)/ffi.h         dist/$(ARTIFACT_NAME)/sysroot/include/
-	cp -f $(FFI_INCLUDE)/ffitarget.h   dist/$(ARTIFACT_NAME)/sysroot/include/
-	cp -f ffi_test$(EXE)               dist/$(ARTIFACT_NAME)/sysroot/bin/
-	tar -czf dist/$(ARTIFACT_NAME).tar.gz -C dist/$(ARTIFACT_NAME) sysroot
-	@echo "  Package: dist/$(ARTIFACT_NAME).tar.gz"
-
-verify-package:
-	@echo "=== Verifying libffi package ==="
-	@TARBALL="dist/$(ARTIFACT_NAME).tar.gz"; \
-	if [ ! -f "$$TARBALL" ]; then \
-	  echo "  FAIL: Package tarball not found: $$TARBALL"; exit 1; \
-	fi; \
-	if ! tar tzf "$$TARBALL" | grep -q 'sysroot/lib/'; then \
-	  echo "  FAIL: Package missing sysroot/lib/ entries"; exit 1; \
-	fi; \
-	echo "  PASS: libffi package verification"
-
-# ===========================================================================
 # Clean
 # ===========================================================================
 
 clean:
 	-$(MAKE) clean 2>/dev/null || true
 	rm -f $(CONFIGURED_MARKER) ffi_test$(EXE)
-	rm -rf dist/
+	rm -rf $(OUT_DIR)
 
-.PHONY: all build clean test test-functional package verify-package
+.PHONY: all build install clean test test-functional

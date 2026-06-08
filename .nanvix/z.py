@@ -27,21 +27,44 @@ from nanvix_zutil import (
     make_initrd,
     run,
 )
+from nanvix_zutil.paths import (
+    dist_dir,
+    include_out,
+    lib_out,
+    nanvix_root,
+    out_dir,
+    repo_root,
+    test_out,
+)
 
-# Build artifacts produced inside the Docker container that must be
-# copied back to the host workspace.  Required on Windows where the
-# build runs in a container-local directory (``/tmp/build``) instead of
-# the mounted workspace; without this list, ``ffi_test.elf`` would be
-# unreachable to the native test runner and the package step would not
-# see ``libffi.a`` / headers on the host filesystem.  Paths are relative
-# to the container build dir.
-_BUILD_DIR = "i686-pc-nanvix"
+# Artifacts produced inside the Docker container that must be copied
+# back to the host workspace on Windows tar-copy mode (where the build
+# runs in container-local /tmp/build instead of the mounted workspace).
+# Two categories:
+#   * legacy repo-root paths needed at runtime (e.g. make_initrd resolves
+#     apps via repo_root()/app);
+#   * install-staged paths under .nanvix/out/{release,test} required by
+#     `./z release` (see _staged_output_files()).
 _OUTPUT_FILES = [
+    # Kept at repo root because make_initrd() resolves apps via
+    # repo_root() / app; the staged copy under test_out() is for the
+    # release tarball, not for test execution.
     "ffi_test.elf",
-    f"{_BUILD_DIR}/.libs/libffi.a",
-    f"{_BUILD_DIR}/include/ffi.h",
-    f"{_BUILD_DIR}/include/ffitarget.h",
 ]
+
+
+def _staged_output_files() -> list[str]:
+    """Return install-staged artifact paths (relative to repo_root()) so
+    Windows tar-copy mode also copies them back to the host workspace.
+    """
+    root = repo_root()
+    return [
+        str((lib_out() / "libffi.a").relative_to(root)),
+        str((include_out() / "ffi.h").relative_to(root)),
+        str((include_out() / "ffitarget.h").relative_to(root)),
+        str((test_out() / "ffi_test.elf").relative_to(root)),
+    ]
+
 
 # Makefile variable names (build-system-specific).
 _MAKE_VAR_HOME = "NANVIX_HOME"
@@ -66,7 +89,7 @@ class LibffiBuild(ZScript):
         the build so subsequent test / package steps can find them.
         """
         cfg = super().docker_config(image)
-        cfg.output_files = list(_OUTPUT_FILES)
+        cfg.output_files = list(_OUTPUT_FILES) + _staged_output_files()
         return cfg
 
     def _make_args(self, *targets: str) -> list[str]:
@@ -83,6 +106,9 @@ class LibffiBuild(ZScript):
             self.docker.translate_path(Path(sysroot)) if self.docker else Path(sysroot)
         )
 
+        def translate(p: Path):
+            return self.docker.translate_path(p) if self.docker else p
+
         args = [
             "make",
             "-f",
@@ -96,6 +122,12 @@ class LibffiBuild(ZScript):
                 f"{_MAKE_VAR_PLATFORM}={self.config.machine}",
                 f"{_MAKE_VAR_PROCESS_MODE}={self.config.deployment_mode}",
                 f"{_MAKE_VAR_MEMORY_SIZE}={self.config.memory_size}",
+                f"NANVIX_ROOT={translate(nanvix_root())}",
+                f"OUT_DIR={translate(out_dir())}",
+                f"DIST_DIR={translate(dist_dir())}",
+                f"LIB_OUT={translate(lib_out())}",
+                f"INCLUDE_OUT={translate(include_out())}",
+                f"TEST_OUT={translate(test_out())}",
             ]
         )
 
@@ -119,7 +151,7 @@ class LibffiBuild(ZScript):
         here, where Docker is available. The test step then just runs
         the pre-built binary natively.
         """
-        run(*self._make_args("all"), cwd=self.repo_root, docker=self.docker)
+        run(*self._make_args("all"), cwd=repo_root(), docker=self.docker)
 
     def test(self) -> None:
         """Run the test suite.
@@ -139,7 +171,7 @@ class LibffiBuild(ZScript):
             # the non-portable `timeout --foreground` binary).
             run(
                 *self._make_args(*targets),
-                cwd=self.repo_root,
+                cwd=repo_root(),
                 timeout=120,
             )
 
@@ -150,7 +182,7 @@ class LibffiBuild(ZScript):
         make_initrd, and a ramfs providing /tmp for test file output.
         Assumes ``ffi_test.elf`` was produced by ``./z build``.
         """
-        ffi_test_elf = self.repo_root / "ffi_test.elf"
+        ffi_test_elf = repo_root() / "ffi_test.elf"
         if not ffi_test_elf.is_file():
             log.fatal(
                 "ffi_test.elf not found.",
@@ -166,7 +198,7 @@ class LibffiBuild(ZScript):
         mkramfs = sysroot_path / "bin" / "mkramfs.elf"
 
         # Bundle ffi_test.elf + daemons into an initrd.
-        initrd = make_initrd(self, "ffi_test.elf")
+        initrd = make_initrd(self, "ffi_test.elf", test=True)
 
         try:
             with tempfile.TemporaryDirectory(prefix="nanvix_ffi_") as tmpdir:
@@ -243,7 +275,7 @@ class LibffiBuild(ZScript):
         # there first, then fall back to build/ for forward-compat.
         test_allowlist = {"ffi_test.elf"}
         test_binaries: list[Path] = []
-        for candidate in [self.repo_root, self.repo_root / "build"]:
+        for candidate in [repo_root(), repo_root() / "build"]:
             if candidate.is_dir():
                 elfs = sorted(candidate.glob("*.elf"))
                 found = [b for b in elfs if b.name in test_allowlist]
@@ -269,7 +301,7 @@ class LibffiBuild(ZScript):
             print(f"RUN  {name}...")
             # make_initrd resolves binaries relative to repo_root;
             # copy the ELF there temporarily unless it already lives there.
-            repo_elf = self.repo_root / binary.name
+            repo_elf = repo_root() / binary.name
             copied_elf = False
             initrd: Path | None = None
             try:
@@ -280,7 +312,7 @@ class LibffiBuild(ZScript):
                         )
                     shutil.copy2(binary, repo_elf)
                     copied_elf = True
-                initrd = make_initrd(self, binary.name)
+                initrd = make_initrd(self, binary.name, test=True)
                 with tempfile.TemporaryDirectory(prefix=f"nanvix_{name}_") as tmpdir:
                     tmpdir_path = Path(tmpdir)
                     ramfs_dir = tmpdir_path / "ramfs"
@@ -321,11 +353,6 @@ class LibffiBuild(ZScript):
             raise RuntimeError(err_msg)
         print(f"\t\t*** All {len(test_binaries)} tests PASSED ***")
 
-    def release(self) -> None:
-        """Package the libffi release tarball and verify it."""
-        run(*self._make_args("package"), cwd=self.repo_root)
-        run(*self._make_args("verify-package"), cwd=self.repo_root)
-
     def clean(self) -> None:
         """Remove build artifacts."""
         run(
@@ -333,7 +360,7 @@ class LibffiBuild(ZScript):
             "-f",
             "Makefile.nanvix",
             "clean",
-            cwd=self.repo_root,
+            cwd=repo_root(),
         )
 
 
