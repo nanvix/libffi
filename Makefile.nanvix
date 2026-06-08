@@ -138,7 +138,7 @@ $(SHAREDLIB): $(LIBFFI)
 ffi_test$(EXE): build
 	@printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c
 	$(CC) -O2 -I$(FFI_INCLUDE) _ffi_test.c $(LIBFFI) \
-	    $(NANVIX_LDFLAGS) -Wl,--allow-multiple-definition \
+	    $(NANVIX_LDFLAGS) \
 	    $(wildcard $(SYSROOT_PATH)/lib/libnvx_crt0.a) \
 	    $(NANVIX_LIBS) \
 	    -o $@
