@@ -79,6 +79,7 @@ CC := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-gcc
 AR := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-ar
 NANVIX_LDFLAGS := -static -L$(SYSROOT_PATH)/lib -T$(SYSROOT_PATH)/lib/user.ld
 NANVIX_LIBS := -Wl,--start-group \
+  $(SYSROOT_PATH)/lib/libnvx_crt0.a \
   $(SYSROOT_PATH)/lib/libposix.a \
   $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libc.a \
   $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libm.a \
@@ -138,7 +139,7 @@ build: $(CONFIGURED_MARKER)
 ffi_test$(EXE): build
 	@printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c
 	$(CC) -O2 -I$(FFI_INCLUDE) _ffi_test.c $(LIBFFI) \
-	    $(NANVIX_LDFLAGS) -Wl,--allow-multiple-definition $(NANVIX_LIBS) \
+	    $(NANVIX_LDFLAGS) $(NANVIX_LIBS) \
 	    -o $@
 	@rm -f _ffi_test.c
 	@echo "  OK: $@ ($$(wc -c < $@) bytes)"
