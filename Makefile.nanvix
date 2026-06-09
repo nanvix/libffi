@@ -7,12 +7,13 @@
 #    MEMORY_SIZE=<size> NANVIX_HOME=<home> NANVIX_TOOLCHAIN=<toolchain> [target]
 #
 # Targets:
-#   all              Build libffi.a, ffi_test.elf, then stage via install
+#   all              Build libffi.a, libffi.so, and ffi_test.elf
 #   build            Configure (if needed) and build libffi.a via autotools
 #   ffi_test.elf     Cross-compile the functional test binary
-#   install          Stage built artifacts into LIB_OUT/INCLUDE_OUT/TEST_OUT
 #   test-functional  Run ffi_test.elf on nanvixd.elf
 #   test             Run all test levels
+#   package          Create release tarball in dist/
+#   verify-package   Verify the release tarball
 #   clean            Remove build artifacts
 
 # ===========================================================================
@@ -26,22 +27,10 @@
 
 .DEFAULT_GOAL = all
 EXE = .elf
-_NANVIX_DOCKER_BUILD_GOALS := all build install ffi_test$(EXE)
-_NANVIX_GOALS := $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 
 # Ensure required variables are defined
-_REQUIRED := PLATFORM \
-    PROCESS_MODE \
-    MEMORY_SIZE \
-    NANVIX_HOME \
-    NANVIX_TOOLCHAIN \
-    NANVIX_ROOT \
-    OUT_DIR \
-    DIST_DIR \
-    LIB_OUT \
-    INCLUDE_OUT \
-    TEST_OUT
-ifneq ($(filter-out clean,$(_NANVIX_GOALS)),)
+_REQUIRED := PLATFORM PROCESS_MODE MEMORY_SIZE NANVIX_HOME NANVIX_TOOLCHAIN
+ifneq ($(filter-out clean,$(MAKECMDGOALS)),)
   $(foreach v,$(_REQUIRED),\
     $(if $($v),,$(error Required variable $v not set))\
   )
@@ -52,10 +41,16 @@ INSTALL_PREFIX ?= $(SYSROOT_PATH)
 # Autotools host-triplet build dir (deterministic for --host=i686-nanvix).
 BUILD_DIR     := i686-pc-nanvix
 LIBFFI        := $(BUILD_DIR)/.libs/libffi.a
+SHAREDLIB     := $(BUILD_DIR)/.libs/libffi.so
 FFI_INCLUDE   := $(BUILD_DIR)/include
-LIB_ARTIFACTS     := $(LIBFFI)
-INCLUDE_ARTIFACTS := $(FFI_INCLUDE)/ffi.h $(FFI_INCLUDE)/ffitarget.h
-TEST_ARTIFACTS    := ffi_test$(EXE)
+ARTIFACT_NAME := libffi-$(PLATFORM)-$(PROCESS_MODE)-$(MEMORY_SIZE)
+
+# Build goal classification.  `SHAREDLIB` must be defined BEFORE this
+# `:=` assignment, otherwise it expands to the empty string and
+# `make $(SHAREDLIB)` would be misclassified as a non-build goal,
+# tripping the build/non-build mixing guard below.
+_NANVIX_DOCKER_BUILD_GOALS := all build ffi_test$(EXE) $(SHAREDLIB)
+_NANVIX_GOALS := $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 CONFIGURED_MARKER := .nanvix-configured
 
 # ===========================================================================
@@ -78,25 +73,19 @@ endif
 CC := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-gcc
 AR := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-ar
 NANVIX_LDFLAGS := -static -L$(SYSROOT_PATH)/lib -T$(SYSROOT_PATH)/lib/user.ld
-NANVIX_LIBS := -Wl,--start-group \
-  $(SYSROOT_PATH)/lib/libposix.a \
-  $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libc.a \
-  $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libm.a \
-  -Wl,--end-group
+# Use -l form (not explicit .a paths) so libtool records these as
+# system libraries in libffi.la rather than treating them as
+# "convenience archives" and bundling their members into libffi.a via
+# `ar cr` (which would produce a non-portable nested-archive layout
+# that breaks consumers using `--whole-archive libffi.a`).
+NANVIX_LIBS := -L$(SYSROOT_PATH)/lib -L$(NANVIX_TOOLCHAIN)/i686-nanvix/lib \
+  -Wl,--start-group -lposix -lc -lm -Wl,--end-group
 
 # ===========================================================================
 # Build Targets
 # ===========================================================================
 
-all: build ffi_test$(EXE) install
-
-# Stage built artifacts into the release/test output tree so that
-# `./z release` (which packages release_dir()) can find them.
-install: build ffi_test$(EXE)
-	@mkdir -p $(LIB_OUT) $(INCLUDE_OUT) $(TEST_OUT)
-	cp -f $(LIB_ARTIFACTS)     $(LIB_OUT)/
-	cp -f $(INCLUDE_ARTIFACTS) $(INCLUDE_OUT)/
-	cp -f $(TEST_ARTIFACTS)    $(TEST_OUT)/
+all: build ffi_test$(EXE) $(SHAREDLIB)
 
 # Regenerate the autotools build system from configure.ac / Makefile.am.
 # Runs inside the Docker toolchain image (which provides autoconf,
@@ -122,6 +111,7 @@ $(CONFIGURED_MARKER): configure
 	@# sources for a 32-bit build and producing undefined references to
 	@# ffi_prep_cif_machdep / ffi_prep_closure_loc at link time.
 	CC="$(CC)" \
+	CFLAGS="-g -O2 -fPIC" \
 	LDFLAGS="$(NANVIX_LDFLAGS) $(NANVIX_LIBS)" \
 	cross_compiling=yes \
 	ac_cv_sizeof_size_t=4 \
@@ -134,6 +124,21 @@ $(CONFIGURED_MARKER): configure
 
 build: $(CONFIGURED_MARKER)
 	$(MAKE) -j$$(nproc)
+	@echo "  OK: $(LIBFFI) ($$($(AR) t $(LIBFFI) | wc -l) members)"
+
+# Build libffi.so from the (PIC) static archive.  libtool's shared-
+# library detection does not know about i686-nanvix, so we keep
+# --disable-shared and link the .so ourselves from the .a.
+#
+# libposix / libc / libm symbols are left UND and bind at dlopen time
+# against the host executable's .dynsym (same model already used by
+# libxml2.so / liblxml_etree.so on Nanvix).
+$(SHAREDLIB): $(LIBFFI)
+	$(CC) -shared -fPIC -nostdlib \
+	    -Wl,-soname,libffi.so -Wl,-z,noexecstack \
+	    -Wl,--whole-archive $(LIBFFI) -Wl,--no-whole-archive \
+	    -o $@
+	@echo "  OK: $@ ($$(wc -c < $@) bytes)"
 
 ffi_test$(EXE): build
 	@printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c
@@ -156,9 +161,55 @@ test-functional:
 	@# host `timeout(1)` binary which is not portable across userlands.
 	cd "$(SYSROOT_PATH)" && ./bin/nanvixd$(EXE) -- $(abspath ffi_test$(EXE))
 	@echo "  PASS: libffi functional tests"
+	@echo "  Verifying $(SHAREDLIB) structural properties..."
+	@test -f $(SHAREDLIB) || { echo "  FAIL: $(SHAREDLIB) not found"; exit 1; }
+	@$(NANVIX_TOOLCHAIN)/bin/i686-nanvix-readelf -d $(SHAREDLIB) | grep -q 'SONAME.*libffi.so' \
+	  || { echo "  FAIL: SONAME=libffi.so not set on $(SHAREDLIB)"; exit 1; }
+	@$(NANVIX_TOOLCHAIN)/bin/i686-nanvix-nm -D $(SHAREDLIB) | grep -q 'T ffi_call' \
+	  || { echo "  FAIL: ffi_call missing from $(SHAREDLIB) .dynsym"; exit 1; }
+	@$(NANVIX_TOOLCHAIN)/bin/i686-nanvix-nm -D $(SHAREDLIB) | grep -q 'T ffi_prep_cif' \
+	  || { echo "  FAIL: ffi_prep_cif missing from $(SHAREDLIB) .dynsym"; exit 1; }
+	@$(NANVIX_TOOLCHAIN)/bin/i686-nanvix-ar t $(LIBFFI) | grep -E '^lib(posix|c|m)\.a$$|^lt[0-9]+-lib' \
+	  && { echo "  FAIL: $(LIBFFI) contains nested archive members"; exit 1; } || true
+	@echo "  PASS: libffi.so structural checks"
 
 test: test-functional
 	@echo "=== All libffi tests PASSED ==="
+
+# ===========================================================================
+# Package Targets
+# ===========================================================================
+
+package:
+	@echo "=== Packaging libffi release ==="
+	@test -f $(LIBFFI)       || { echo "  FAIL: $(LIBFFI) not found; run ./z build first"; exit 1; }
+	@test -f $(SHAREDLIB)    || { echo "  FAIL: $(SHAREDLIB) not found; run ./z build first"; exit 1; }
+	@test -f ffi_test$(EXE)  || { echo "  FAIL: ffi_test$(EXE) not found; run ./z build first"; exit 1; }
+	rm -rf dist/$(ARTIFACT_NAME)
+	mkdir -p dist/$(ARTIFACT_NAME)/sysroot/lib \
+	         dist/$(ARTIFACT_NAME)/sysroot/include \
+	         dist/$(ARTIFACT_NAME)/sysroot/bin
+	cp -f $(LIBFFI)                    dist/$(ARTIFACT_NAME)/sysroot/lib/
+	cp -f $(SHAREDLIB)                 dist/$(ARTIFACT_NAME)/sysroot/lib/
+	cp -f $(FFI_INCLUDE)/ffi.h         dist/$(ARTIFACT_NAME)/sysroot/include/
+	cp -f $(FFI_INCLUDE)/ffitarget.h   dist/$(ARTIFACT_NAME)/sysroot/include/
+	cp -f ffi_test$(EXE)               dist/$(ARTIFACT_NAME)/sysroot/bin/
+	tar -czf dist/$(ARTIFACT_NAME).tar.gz -C dist/$(ARTIFACT_NAME) sysroot
+	@echo "  Package: dist/$(ARTIFACT_NAME).tar.gz"
+
+verify-package:
+	@echo "=== Verifying libffi package ==="
+	@TARBALL="dist/$(ARTIFACT_NAME).tar.gz"; \
+	if [ ! -f "$$TARBALL" ]; then \
+	  echo "  FAIL: Package tarball not found: $$TARBALL"; exit 1; \
+	fi; \
+	if ! tar tzf "$$TARBALL" | grep -q 'sysroot/lib/libffi.a'; then \
+	  echo "  FAIL: Package missing sysroot/lib/libffi.a"; exit 1; \
+	fi; \
+	if ! tar tzf "$$TARBALL" | grep -q 'sysroot/lib/libffi.so'; then \
+	  echo "  FAIL: Package missing sysroot/lib/libffi.so"; exit 1; \
+	fi; \
+	echo "  PASS: libffi package verification"
 
 # ===========================================================================
 # Clean
@@ -166,7 +217,7 @@ test: test-functional
 
 clean:
 	-$(MAKE) clean 2>/dev/null || true
-	rm -f $(CONFIGURED_MARKER) ffi_test$(EXE)
-	rm -rf $(OUT_DIR)
+	rm -f $(CONFIGURED_MARKER) ffi_test$(EXE) $(SHAREDLIB)
+	rm -rf dist/
 
-.PHONY: all build install clean test test-functional
+.PHONY: all build clean test test-functional package verify-package
