@@ -1,7 +1,7 @@
 [package]
 name = "libffi"
 version = "3.4.6"
-nanvix-version = "0.16.140"
+nanvix-version = "0.17.5"
 
 [builds]
 [builds.matrix]
