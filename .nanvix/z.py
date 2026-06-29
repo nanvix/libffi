@@ -271,11 +271,18 @@ class LibffiBuild(ZScript):
                 hint="Run `./z setup` first.",
             )
 
-        # The Makefile outputs ffi_test.elf to the repo root.  Search
-        # there first, then fall back to build/ for forward-compat.
+        # Discovery order: `test_out()` first (the windows-test artifact
+        # overlay location at `.nanvix/out/test/`, populated by the
+        # canonical workflow's `download-artifact` step and by
+        # `_stage_artifacts_elf_so` in nanvix_scripts for the local sim).
+        # Then fall back to `repo_root()` (where the Makefile leaves the
+        # link-step output) and `repo_root()/build` (forward-compat).
+        # `make_initrd` in zutils v0.13.0 hardcodes `repo_root() / app`,
+        # so the per-binary block below stages a copy at the repo root
+        # when needed and cleans it up in `finally`.
         test_allowlist = {"ffi_test.elf"}
         test_binaries: list[Path] = []
-        for candidate in [repo_root(), repo_root() / "build"]:
+        for candidate in [test_out(), repo_root(), repo_root() / "build"]:
             if candidate.is_dir():
                 elfs = sorted(candidate.glob("*.elf"))
                 found = [b for b in elfs if b.name in test_allowlist]
@@ -306,12 +313,14 @@ class LibffiBuild(ZScript):
             initrd: Path | None = None
             try:
                 if binary.resolve() != repo_elf.resolve():
-                    if repo_elf.exists():
-                        raise FileExistsError(
-                            f"refusing to clobber existing {repo_elf}"
-                        )
+                    # `staged_created` is False whenever the repo-root copy
+                    # pre-existed (e.g. a dev's prior `./z build` left it
+                    # there alongside the install copy in `test_out()`), so
+                    # cleanup never deletes a developer's build output.
+                    # Parity with bzip2/openssl.
+                    preexisted = repo_elf.exists()
                     shutil.copy2(binary, repo_elf)
-                    copied_elf = True
+                    copied_elf = not preexisted
                 initrd = make_initrd(self, binary.name, test=True)
                 with tempfile.TemporaryDirectory(prefix=f"nanvix_{name}_") as tmpdir:
                     tmpdir_path = Path(tmpdir)
