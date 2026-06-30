@@ -12,7 +12,6 @@ Usage:
     ./z clean     # Remove build artifacts
 """
 
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -41,14 +40,14 @@ from nanvix_zutil.paths import (
 # back to the host workspace on Windows tar-copy mode (where the build
 # runs in container-local /tmp/build instead of the mounted workspace).
 # Two categories:
-#   * legacy repo-root paths needed at runtime (e.g. make_initrd resolves
-#     apps via repo_root()/app);
+#   * repo-root paths where the Makefile leaves link-step output and the
+#     standalone test expects to find it;
 #   * install-staged paths under .nanvix/out/{release,test} required by
 #     `./z release` (see _staged_output_files()).
 _OUTPUT_FILES = [
-    # Kept at repo root because make_initrd() resolves apps via
-    # repo_root() / app; the staged copy under test_out() is for the
-    # release tarball, not for test execution.
+    # Makefile leaves ffi_test.elf at the repo root; the standalone test
+    # loads it from there. The staged copy under test_out() is for the
+    # release tarball.
     "ffi_test.elf",
 ]
 
@@ -198,7 +197,7 @@ class LibffiBuild(ZScript):
         mkramfs = sysroot_path / "bin" / "mkramfs.elf"
 
         # Bundle ffi_test.elf + daemons into an initrd.
-        initrd = make_initrd(self, "ffi_test.elf", test=True)
+        initrd = make_initrd(self, ffi_test_elf, test_out())
 
         try:
             with tempfile.TemporaryDirectory(prefix="nanvix_ffi_") as tmpdir:
@@ -277,9 +276,6 @@ class LibffiBuild(ZScript):
         # `_stage_artifacts_elf_so` in nanvix_scripts for the local sim).
         # Then fall back to `repo_root()` (where the Makefile leaves the
         # link-step output) and `repo_root()/build` (forward-compat).
-        # `make_initrd` in zutils v0.13.0 hardcodes `repo_root() / app`,
-        # so the per-binary block below stages a copy at the repo root
-        # when needed and cleans it up in `finally`.
         test_allowlist = {"ffi_test.elf"}
         test_binaries: list[Path] = []
         for candidate in [test_out(), repo_root(), repo_root() / "build"]:
@@ -306,22 +302,9 @@ class LibffiBuild(ZScript):
         for binary in test_binaries:
             name = binary.stem
             print(f"RUN  {name}...")
-            # make_initrd resolves binaries relative to repo_root;
-            # copy the ELF there temporarily unless it already lives there.
-            repo_elf = repo_root() / binary.name
-            copied_elf = False
             initrd: Path | None = None
             try:
-                if binary.resolve() != repo_elf.resolve():
-                    # `staged_created` is False whenever the repo-root copy
-                    # pre-existed (e.g. a dev's prior `./z build` left it
-                    # there alongside the install copy in `test_out()`), so
-                    # cleanup never deletes a developer's build output.
-                    # Parity with bzip2/openssl.
-                    preexisted = repo_elf.exists()
-                    shutil.copy2(binary, repo_elf)
-                    copied_elf = not preexisted
-                initrd = make_initrd(self, binary.name, test=True)
+                initrd = make_initrd(self, binary, test_out())
                 with tempfile.TemporaryDirectory(prefix=f"nanvix_{name}_") as tmpdir:
                     tmpdir_path = Path(tmpdir)
                     ramfs_dir = tmpdir_path / "ramfs"
@@ -353,8 +336,6 @@ class LibffiBuild(ZScript):
             finally:
                 if initrd is not None and initrd.exists():
                     initrd.unlink()
-                if copied_elf and repo_elf.exists():
-                    repo_elf.unlink()
 
         if failed:
             msg = " ".join(failed)
