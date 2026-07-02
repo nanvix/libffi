@@ -11,9 +11,10 @@
 #   build            Configure (if needed) and build libffi.a via autotools
 #   ffi_test.elf     Cross-compile the functional test binary
 #   install          Stage built artifacts into LIB_OUT/INCLUDE_OUT/TEST_OUT
-#   test-functional  Run ffi_test.elf on nanvixd.elf
-#   test             Run all test levels
 #   clean            Remove build artifacts
+#
+# Only the standalone deployment mode is supported. The functional test is
+# driven from .nanvix/z.py (make_initrd + nanvixd), not from this Makefile.
 
 # ===========================================================================
 # Global Variables
@@ -70,26 +71,36 @@ ifneq ($(_BUILD),)
     $(error Cannot mix build and non-build targets. Build targets: $(_NANVIX_DOCKER_BUILD_GOALS))
   endif
 
-  ifeq ($(wildcard $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-gcc),)
+  ifeq ($(wildcard $(NANVIX_TOOLCHAIN)/bin/clang),)
     $(error Nanvix toolchain not found at $(NANVIX_TOOLCHAIN))
   endif
 endif
 
-CC := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-gcc
-AR := $(NANVIX_TOOLCHAIN)/bin/i686-nanvix-ar
-# Since Nanvix 0.16.19, process startup (`_start`) lives in libnvx_crt0.a; it
-# drives `__nanvix_libc_start_main` in libposix.a. It must be linked first so
-# its strong `_start` overrides the toolchain's weak no-op stub (otherwise the
-# guest never reaches main and hangs). The wildcard keeps this a no-op on older
-# Nanvix releases that do not ship libnvx_crt0.a. libnvx_crt0.a and libposix.a
-# share some kcall objects, so allow multiple definitions to resolve the overlap.
-NANVIX_LDFLAGS := -static -L$(SYSROOT_PATH)/lib -T$(SYSROOT_PATH)/lib/user.ld -Wl,--allow-multiple-definition
-NANVIX_LIBS := -Wl,--start-group \
-  $(wildcard $(SYSROOT_PATH)/lib/libnvx_crt0.a) \
-  $(SYSROOT_PATH)/lib/libposix.a \
-  $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libc.a \
-  $(NANVIX_TOOLCHAIN)/i686-nanvix/lib/libm.a \
-  -Wl,--end-group
+# The Nanvix LLVM toolchain image ships a clang whose default target is
+# i686-unknown-nanvix, plus the LLVM binutils (llvm-ar, llvm-ranlib, ld.lld).
+# Pass the nanvix target triple explicitly so the port always links against the
+# toolchain's bundled Nanvix libc/headers. Do NOT use the freestanding
+# i686-unknown-none target: that is for building the libc itself, not for
+# building software that links against it.
+NANVIX_TARGET := i686-unknown-nanvix
+CC := $(NANVIX_TOOLCHAIN)/bin/clang --target=$(NANVIX_TARGET)
+AR := $(NANVIX_TOOLCHAIN)/bin/llvm-ar
+RANLIB := $(NANVIX_TOOLCHAIN)/bin/llvm-ranlib
+# The toolchain bundles the full guest runtime under $(NANVIX_TOOLCHAIN)/lib:
+# the startup object crt0.o (nvx-crt0 entry), libc.a, libm.a, and the guest
+# linker script user.ld. clang links crt0.o + libc (and libm) in by default, so
+# the port only has to point the linker at the guest linker script and entry
+# symbol -- no explicit -L/sysroot or library group is required anymore.
+#
+#   -static            fully static guest executable (deterministic; no libc.so).
+#   -z muldefs         crt0.o and libc.a both define the __kcall_* syscall thunks
+#                      (the LLVM equivalent of --allow-multiple-definition).
+#   -z noexecstack     emit a non-executable stack, matching the guest ABI.
+#   -T user.ld         guest linker script: fixes the load address and defines
+#                      __dynamic_start/__dynamic_end referenced by the crt0.
+#   --entry=_do_start  _do_start is the nvx-crt0 guest entry point.
+NANVIX_LDFLAGS := -static -Wl,-z,muldefs -Wl,-z,noexecstack \
+  -Wl,-T,$(NANVIX_TOOLCHAIN)/lib/user.ld -Wl,--entry=_do_start
 
 # ===========================================================================
 # Build Targets
@@ -121,7 +132,7 @@ $(CONFIGURED_MARKER): configure
 	  sed -i 's/| fiwix\* )/| fiwix* | nanvix* )/' config.sub; \
 	fi
 	@# Force cross-compile mode and pre-seed sizeof cache vars.
-	@# The Docker host can sometimes execute i686-nanvix-gcc output (32-bit
+	@# The Docker host can sometimes execute clang's i686-nanvix output (32-bit
 	@# ELF runs transparently on x86_64 Linux), which fools autoconf into
 	@# thinking we are not cross-compiling and causes AC_CHECK_SIZEOF to
 	@# return empty values.  An empty ac_cv_sizeof_size_t then makes
@@ -129,7 +140,9 @@ $(CONFIGURED_MARKER): configure
 	@# sources for a 32-bit build and producing undefined references to
 	@# ffi_prep_cif_machdep / ffi_prep_closure_loc at link time.
 	CC="$(CC)" \
-	LDFLAGS="$(NANVIX_LDFLAGS) $(NANVIX_LIBS)" \
+	AR="$(AR)" \
+	RANLIB="$(RANLIB)" \
+	LDFLAGS="$(NANVIX_LDFLAGS)" \
 	cross_compiling=yes \
 	ac_cv_sizeof_size_t=4 \
 	ac_cv_sizeof_double=8 \
@@ -145,27 +158,10 @@ build: $(CONFIGURED_MARKER)
 ffi_test$(EXE): build
 	@printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c
 	$(CC) -O2 -I$(FFI_INCLUDE) _ffi_test.c $(LIBFFI) \
-	    $(NANVIX_LDFLAGS) -Wl,--allow-multiple-definition $(NANVIX_LIBS) \
+	    $(NANVIX_LDFLAGS) \
 	    -o $@
 	@rm -f _ffi_test.c
 	@echo "  OK: $@ ($$(wc -c < $@) bytes)"
-
-# ===========================================================================
-# Test Targets
-# ===========================================================================
-
-test-functional:
-	@echo "=== libffi functional tests ==="
-	@test -f ffi_test$(EXE) || { echo "  FAIL: ffi_test$(EXE) not built (run ./z build first)"; exit 1; }
-	@echo "  Running ffi_test$(EXE) via nanvixd$(EXE)..."
-	@# Timeout/cancellation is handled by .nanvix/z.py's `timeout=` facility
-	@# (see _run_functional_standalone and test()), avoiding reliance on a
-	@# host `timeout(1)` binary which is not portable across userlands.
-	cd "$(SYSROOT_PATH)" && ./bin/nanvixd$(EXE) -- $(abspath ffi_test$(EXE))
-	@echo "  PASS: libffi functional tests"
-
-test: test-functional
-	@echo "=== All libffi tests PASSED ==="
 
 # ===========================================================================
 # Clean
@@ -176,4 +172,4 @@ clean:
 	rm -f $(CONFIGURED_MARKER) ffi_test$(EXE)
 	rm -rf $(OUT_DIR)
 
-.PHONY: all build install clean test test-functional
+.PHONY: all build install clean
