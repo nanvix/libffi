@@ -65,7 +65,7 @@ docker pull ghcr.io/nanvix/toolchain-libffi:latest
 
 # 2. Download Nanvix sysroot
 curl -fsSL https://raw.githubusercontent.com/nanvix/nanvix/refs/heads/dev/scripts/get-nanvix.sh | bash -s -- nanvix-artifacts
-tar -xjf nanvix-artifacts/*microvm*single*.tar.bz2 -C nanvix-artifacts
+tar -xjf nanvix-artifacts/*microvm*standalone*.tar.bz2 -C nanvix-artifacts
 export NANVIX_HOME=$(find nanvix-artifacts -maxdepth 2 -type d -name "bin" -exec dirname {} \; | head -1)
 
 # 3. Build (Docker is used automatically if native toolchain is not found)
@@ -93,11 +93,7 @@ You need the following to build libffi for Nanvix:
 
 | Platform | Process Mode | Artifact Pattern |
 |----------|--------------|------------------|
-| hyperlight | multi-process | `hyperlight.*multi-process` |
-| hyperlight | single-process | `hyperlight.*single-process` |
 | hyperlight | standalone | `hyperlight.*standalone` |
-| microvm | multi-process | `microvm.*multi-process` |
-| microvm | single-process | `microvm.*single-process` |
 | microvm | standalone | `microvm.*standalone` |
 
 ### Downloading Nanvix
@@ -174,9 +170,6 @@ After a successful build, you will have:
 ```bash
 # Run all tests
 ./z test
-
-# Or run a specific test target
-./z test -- test-functional
 ```
 
 Alternatively, invoke Make directly:
@@ -230,7 +223,7 @@ The following changes were made to support Nanvix.
 |------------|--------|
 | **No shared libraries** | Only static library (`libffi.a`) is built |
 | **Static linking only** | All executables are statically linked |
-| **No closures on some modes** | FFI closures depend on writable+executable memory |
+| **No closures** | FFI closures depend on writable+executable memory |
 
 ---
 
@@ -260,17 +253,14 @@ shared CI configuration and are not defined directly in this repository's workfl
 
 ### Build Matrix
 
-The CI runs on 6 different platform/process-mode configurations on Linux, plus standalone-only Windows tests:
+The CI runs the standalone deployment mode across the supported platforms on
+Linux (build + full test), plus standalone Windows tests:
 
 #### Linux (build + full test)
 
 | Platform | Process Mode |
 |----------|--------------|
-| hyperlight | multi-process |
-| hyperlight | single-process |
 | hyperlight | standalone |
-| microvm | multi-process |
-| microvm | single-process |
 | microvm | standalone |
 
 #### Windows (standalone test)
@@ -280,9 +270,9 @@ The CI runs on 6 different platform/process-mode configurations on Linux, plus s
 | hyperlight | standalone |
 | microvm | standalone |
 
-> **Note:** Single-process and multi-process modes are Linux-only because they
-> depend on `nanvixd` Linux daemon features not available on Windows.
-> Windows tests run the standalone deployment mode using `nanvixd.exe`.
+> **Note:** Only the standalone deployment mode is supported. Single-process
+> and multi-process modes have been dropped. Windows tests run the standalone
+> deployment mode using `nanvixd.exe`.
 
 All configurations run in parallel with `fail-fast: false`, ensuring that all platforms are tested even if one fails.
 

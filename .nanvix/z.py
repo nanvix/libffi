@@ -153,26 +153,17 @@ class LibffiBuild(ZScript):
         run(*self._make_args("all"), cwd=repo_root(), docker=self.docker)
 
     def test(self) -> None:
-        """Run the test suite.
+        """Run the standalone functional test suite.
 
-        In standalone mode the functional test is handled in Python so
-        that initrd creation is shared across platforms.
+        The functional test is handled in Python so that initrd creation
+        is shared across platforms. Only the standalone deployment mode is
+        supported.
         """
         if IS_WINDOWS:
             self._run_tests_windows()
             return
 
-        if self.config.deployment_mode == "standalone":
-            self._run_functional_standalone()
-        else:
-            targets = self.targets if self.targets else ["test"]
-            # Timeout bounds the functional run (Makefile no longer relies on
-            # the non-portable `timeout --foreground` binary).
-            run(
-                *self._make_args(*targets),
-                cwd=repo_root(),
-                timeout=120,
-            )
+        self._run_functional_standalone()
 
     def _run_functional_standalone(self) -> None:
         """Run the standalone functional test using make_initrd.
@@ -235,18 +226,10 @@ class LibffiBuild(ZScript):
     def _run_tests_windows(self) -> None:
         """Run tests natively on Windows using nanvixd.exe.
 
-        Only standalone mode is tested on Windows; multi-process and
-        single-process require linuxd, which is Linux-only.  Uses
+        Only the standalone deployment mode is supported.  Uses
         make_initrd to bundle each test binary with system daemons,
         and a ramfs providing /tmp for any test I/O.
         """
-        if self.config.deployment_mode != "standalone":
-            print(
-                f"Skipping tests on Windows for mode"
-                f" '{self.config.deployment_mode}' (requires linuxd)."
-            )
-            return
-
         sysroot = self.config.get(CFG_SYSROOT, "")
         if not sysroot:
             log.fatal(
