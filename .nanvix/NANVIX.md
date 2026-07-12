@@ -13,6 +13,7 @@ This document describes the port of [libffi](https://sourceware.org/libffi/) for
 | **Base Version** | libffi 3.4.6 |
 | **Target Platform** | Nanvix (i686) |
 | **Build System** | GNU Make (wrapping autotools configure) |
+| **Compiler** | Clang/LLVM from the Nanvix C SDK |
 
 **What's included:**
 - ✅ Cross-compilation support for Nanvix
@@ -40,39 +41,27 @@ This document describes the port of [libffi](https://sourceware.org/libffi/) for
 For experienced users who want to build quickly:
 
 ```bash
-# 1. Install nanvix-zutil (requires gh CLI: https://cli.github.com)
-#    Using a venv is recommended on modern Linux distros (PEP 668).
-python3 -m venv .venv && source .venv/bin/activate
-WHEEL_URL=$(gh api repos/nanvix/zutils/releases/latest \
-  --jq '.assets[] | select(.name | endswith(".whl")) | .browser_download_url')
-pip install "$WHEEL_URL"
+# 1. Configure the immutable SDK and download the matching runtime.
+SDK=ghcr.io/nanvix/nanvix-sdk-c-clang@sha256:f61737cb0780e6a2058c6d0bdf8ae5562db18de437173b2bcbbe6973abd3689f
+./z setup --with-docker "$SDK"
 
-# 2. Setup (downloads Nanvix sysroot automatically)
-./z setup
-
-# 3. Build
+# 2. Build.
 ./z build
 
-# 4. Run tests
+# 3. Run tests.
 ./z test
 ```
 
-Or build directly with Make (advanced):
+The wrapper bootstraps the pinned `nanvix-zutil` release automatically.
+The SDK contains the compiler, target headers, libc, startup object, linker
+script, and compiler runtime. `./z setup` downloads only the Nanvix runtime
+binaries used by tests.
+
+To inspect or use the SDK directly:
 
 ```bash
-# 1. Pull the Docker image
-docker pull ghcr.io/nanvix/toolchain-libffi:latest
-
-# 2. Download Nanvix sysroot
-curl -fsSL https://raw.githubusercontent.com/nanvix/nanvix/refs/heads/dev/scripts/get-nanvix.sh | bash -s -- nanvix-artifacts
-tar -xjf nanvix-artifacts/*microvm*standalone*.tar.bz2 -C nanvix-artifacts
-export NANVIX_HOME=$(find nanvix-artifacts -maxdepth 2 -type d -name "bin" -exec dirname {} \; | head -1)
-
-# 3. Build (Docker is used automatically if native toolchain is not found)
-make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME="$NANVIX_HOME"
-
-# 4. Run tests
-make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME="$NANVIX_HOME" test
+docker pull "$SDK"
+docker run --rm "$SDK" cat /opt/nanvix/nanvix-sdk.json
 ```
 
 Continue reading for detailed instructions.
@@ -86,15 +75,20 @@ You need the following to build libffi for Nanvix:
 | Component | Description | Install |
 |-----------|-------------|---------|
 | **nanvix-zutil** | Build orchestration CLI | `pip install` from [GitHub Releases](https://github.com/nanvix/zutils/releases) |
-| **Nanvix Toolchain** | i686-nanvix cross-compiler | Docker image or native install |
-| **Nanvix Sysroot** | System libraries and linker script | `nanvix-zutil setup` |
+| **Nanvix C SDK** | Clang/LLVM and target build sysroot | Immutable Docker image |
+| **Nanvix Runtime** | Kernel, daemons, and image tools | `./z setup` |
 
 ### Available Platform Configurations
 
 | Platform | Process Mode | Artifact Pattern |
 |----------|--------------|------------------|
-| hyperlight | standalone | `hyperlight.*standalone` |
 | microvm | standalone | `microvm.*standalone` |
+
+The 0.20.0 release publishes only microvm runtime assets and does not publish
+a standalone 128 MB artifact. Consequently, the manifest and active CI
+workflows use microvm at 256 MB; this is a runtime compatibility constraint,
+not a libffi port failure. All existing Linux functional and Windows test
+types remain enabled.
 
 ### Downloading Nanvix
 
@@ -111,43 +105,35 @@ The script downloads all release artifacts. Extract the one matching your target
 ### Using nanvix-zutil (Recommended)
 
 ```bash
-# Install nanvix-zutil (use a venv on modern Linux distros)
-python3 -m venv .venv && source .venv/bin/activate
-WHEEL_URL=$(gh api repos/nanvix/zutils/releases/latest \
-  --jq '.assets[] | select(.name | endswith(".whl")) | .browser_download_url')
-pip install "$WHEEL_URL"
-
-# Setup sysroot and build
-./z setup
+# Configure the SDK, download runtime binaries, and build.
+SDK=ghcr.io/nanvix/nanvix-sdk-c-clang@sha256:f61737cb0780e6a2058c6d0bdf8ae5562db18de437173b2bcbbe6973abd3689f
+./z setup --with-docker "$SDK"
 ./z build
 ```
 
-### Using Docker (Direct Make)
+### SDK Contents
 
-The Makefile supports automatic Docker fallback when the native toolchain is not available:
+The build uses SDK v0.20.0-sdk.1, which targets Nanvix runtime 0.20.0. Its
+Clang driver selects `i686-unknown-nanvix` and supplies `crt0.o`, `user.ld`,
+libc, libm, and compiler-rt automatically. Final executable links also use
+Clang; the port does not manually compose Newlib, libgcc, or Nanvix runtime
+libraries.
 
-```bash
-# Pull the Nanvix toolchain Docker image
-docker pull ghcr.io/nanvix/toolchain-libffi:latest
-
-# Build (Docker is used automatically if native toolchain is not found)
-make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/path/to/nanvix/sysroot-debug
-```
-
-> **Note:** The sysroot (`NANVIX_HOME`) must contain `lib/libposix.a` and `lib/user.ld` from a Nanvix build. The autotools build system (`configure`, `Makefile.in`, etc.) is regenerated automatically via `autoreconf` inside the Docker toolchain image, so a git checkout is sufficient — no release tarball is required.
-
-**Docker Fallback Behavior:**
-- If `NANVIX_TOOLCHAIN` points to a valid toolchain, it uses the native compiler
-- If the native toolchain is not found, it automatically uses Docker if available
-- Use `CONFIG_NANVIX_DOCKER=y` to force Docker usage even when native toolchain exists
-- Use `NANVIX_DOCKER_IMAGE` to specify a custom Docker image (default: `ghcr.io/nanvix/toolchain-libffi:latest`)
+The SDK includes Autoconf, Automake, libtool, M4, GCC, and Perl. It does not
+include Texinfo. This port regenerates the autotools files successfully without
+`makeinfo` and configures libffi with `--disable-docs`, so no derived image is
+needed.
 
 ### Using Native Toolchain
 
 ```bash
-export NANVIX_TOOLCHAIN=/path/to/toolchain  # Contains: bin/i686-nanvix-gcc
-export NANVIX_HOME=/path/to/nanvix          # Contains: lib/user.ld, lib/libposix.a
-make -f Makefile.nanvix CONFIG_NANVIX=y all
+export NANVIX_TOOLCHAIN=/path/to/sdk      # nanvix-sdk.json and bin/clang
+export NANVIX_HOME=/path/to/runtime       # runtime binaries used by tests
+make -f Makefile.nanvix \
+  PLATFORM=microvm PROCESS_MODE=standalone MEMORY_SIZE=256mb \
+  NANVIX_ROOT="$PWD/.nanvix" OUT_DIR="$PWD/.nanvix/out" \
+  DIST_DIR="$PWD/.nanvix/out/dist" LIB_OUT="$PWD/.nanvix/out/lib" \
+  INCLUDE_OUT="$PWD/.nanvix/out/include" TEST_OUT="$PWD/.nanvix/out/test"
 ```
 
 ### Build Outputs
@@ -197,7 +183,7 @@ The following changes were made to support Nanvix.
 |--------|-------------|
 | New Makefile | Added `Makefile.nanvix` for Nanvix cross-compilation |
 | Cross-compilation | Uses `CONFIG_NANVIX=y` option to enable Nanvix build |
-| Docker support | Automatic Docker fallback when native toolchain not available |
+| Docker support | Immutable SDK image selected by `./z setup --with-docker` |
 | Configure wrapper | Wraps `./configure` with Nanvix cross-compilation settings |
 | Shared libraries | Disabled (`--disable-shared --enable-static`) |
 | Platform patch | Patches `config.sub` to recognize `nanvix` as a valid platform |
@@ -253,21 +239,19 @@ shared CI configuration and are not defined directly in this repository's workfl
 
 ### Build Matrix
 
-The CI runs the standalone deployment mode across the supported platforms on
-Linux (build + full test), plus standalone Windows tests:
+The CI runs the standalone deployment mode on microvm at 256 MB on Linux
+(build + full test), plus the corresponding standalone Windows test:
 
 #### Linux (build + full test)
 
 | Platform | Process Mode |
 |----------|--------------|
-| hyperlight | standalone |
 | microvm | standalone |
 
 #### Windows (standalone test)
 
 | Platform | Process Mode |
 |----------|--------------|
-| hyperlight | standalone |
 | microvm | standalone |
 
 > **Note:** Only the standalone deployment mode is supported. Single-process
