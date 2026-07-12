@@ -1,3 +1,19 @@
+# GNU libtool 2.4.7 moved LT_SYS_SYMBOL_USCORE to the optional libltdl
+# development package. Nanvix ELF symbols do not use a leading underscore.
+m4_ifndef([LT_SYS_SYMBOL_USCORE], [
+AC_DEFUN([LT_SYS_SYMBOL_USCORE],
+[case "$host_os" in
+  nanvix*)
+    sys_symbol_underscore=no
+    ;;
+  *)
+    AC_MSG_ERROR([the required libtool symbol probe is unavailable for $host_os])
+    ;;
+esac
+AC_SUBST([sys_symbol_underscore])
+])
+])
+
 # mmap(2) blacklisting.  Some platforms provide the mmap library routine
 # but don't support all of the features we need from it.
 AC_DEFUN([AC_FUNC_MMAP_BLACKLIST],

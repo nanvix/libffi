@@ -79,6 +79,19 @@ IS_WINDOWS = sys.platform == "win32"
 class LibffiBuild(ZScript):
     """Build script for nanvix/libffi."""
 
+    # Build-time headers, libraries, startup objects, and linker scripts come
+    # from the SDK. The downloaded sysroot is used only to run tests.
+    SYSROOT_REQUIRED_FILES = (
+        "bin/nanvixd.elf",
+        "bin/kernel.elf",
+        "bin/mkramfs.elf",
+    )
+    SYSROOT_REQUIRED_FILES_WINDOWS = (
+        "bin/nanvixd.exe",
+        "bin/kernel.elf",
+        "bin/mkramfs.exe",
+    )
+
     def docker_config(self, image: str) -> DockerConfig:
         """Extend the default Docker config with build output copy-back.
 
@@ -136,10 +149,8 @@ class LibffiBuild(ZScript):
     def setup(self) -> bool:
         """Download the Nanvix sysroot.
 
-        The autotools build system (``configure``, ``Makefile.in``, ...)
-        is regenerated on demand by ``Makefile.nanvix`` inside the Docker
-        toolchain image (see the ``configure`` target there).  No
-        host-side autotools install is required.
+        The downloaded sysroot supplies runtime binaries only. Build-time
+        headers, libraries, and tools are provided by the SDK image.
         """
         return super().setup()
 
