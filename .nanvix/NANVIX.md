@@ -41,9 +41,8 @@ This document describes the port of [libffi](https://sourceware.org/libffi/) for
 For experienced users who want to build quickly:
 
 ```bash
-# 1. Configure the immutable SDK and download the matching runtime.
-SDK=ghcr.io/nanvix/nanvix-sdk-c-clang@sha256:f61737cb0780e6a2058c6d0bdf8ae5562db18de437173b2bcbbe6973abd3689f
-./z setup --with-docker "$SDK"
+# 1. Use the manifest SDK and download the matching runtime.
+./z setup
 
 # 2. Build.
 ./z build
@@ -105,15 +104,14 @@ The script downloads all release artifacts. Extract the one matching your target
 ### Using nanvix-zutil (Recommended)
 
 ```bash
-# Configure the SDK, download runtime binaries, and build.
-SDK=ghcr.io/nanvix/nanvix-sdk-c-clang@sha256:f61737cb0780e6a2058c6d0bdf8ae5562db18de437173b2bcbbe6973abd3689f
-./z setup --with-docker "$SDK"
+# Configure the manifest SDK, download runtime binaries, and build.
+./z setup
 ./z build
 ```
 
 ### SDK Contents
 
-The build uses SDK v0.20.0-sdk.1, which targets Nanvix runtime 0.20.0. Its
+The build uses the SDK pinned in `nanvix.toml`, targeting Nanvix runtime 0.20.0. Its
 Clang driver selects `i686-unknown-nanvix` and supplies `crt0.o`, `user.ld`,
 libc, libm, and compiler-rt automatically. Final executable links also use
 Clang; the port does not manually compose Newlib, libgcc, or Nanvix runtime
