@@ -27,9 +27,8 @@ from nanvix_zutil import (
     run,
 )
 from nanvix_zutil.paths import (
+    dev_out,
     dist_dir,
-    include_out,
-    lib_out,
     nanvix_root,
     out_dir,
     repo_root,
@@ -58,9 +57,9 @@ def _staged_output_files() -> list[str]:
     """
     root = repo_root()
     return [
-        str((lib_out() / "libffi.a").relative_to(root)),
-        str((include_out() / "ffi.h").relative_to(root)),
-        str((include_out() / "ffitarget.h").relative_to(root)),
+        str((dev_out() / "lib" / "libffi.a").relative_to(root)),
+        str((dev_out() / "include" / "ffi.h").relative_to(root)),
+        str((dev_out() / "include" / "ffitarget.h").relative_to(root)),
         str((test_out() / "ffi_test.elf").relative_to(root)),
     ]
 
@@ -137,8 +136,8 @@ class LibffiBuild(ZScript):
                 f"NANVIX_ROOT={translate(nanvix_root())}",
                 f"OUT_DIR={translate(out_dir())}",
                 f"DIST_DIR={translate(dist_dir())}",
-                f"LIB_OUT={translate(lib_out())}",
-                f"INCLUDE_OUT={translate(include_out())}",
+                f"LIB_OUT={translate(dev_out() / 'lib')}",
+                f"INCLUDE_OUT={translate(dev_out() / 'include')}",
                 f"TEST_OUT={translate(test_out())}",
             ]
         )
