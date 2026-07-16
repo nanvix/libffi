@@ -198,7 +198,7 @@ class LibffiBuild(ZScript):
         mkramfs = sysroot_path / "bin" / "mkramfs.elf"
 
         # Bundle ffi_test.elf + daemons into an initrd.
-        initrd = make_initrd(self, ffi_test_elf, test_out())
+        initrd = make_initrd(ffi_test_elf, test_out())
 
         try:
             with tempfile.TemporaryDirectory(prefix="nanvix_ffi_") as tmpdir:
@@ -297,7 +297,7 @@ class LibffiBuild(ZScript):
             print(f"RUN  {name}...")
             initrd: Path | None = None
             try:
-                initrd = make_initrd(self, binary, test_out())
+                initrd = make_initrd(binary, test_out())
                 with tempfile.TemporaryDirectory(prefix=f"nanvix_{name}_") as tmpdir:
                     tmpdir_path = Path(tmpdir)
                     ramfs_dir = tmpdir_path / "ramfs"
