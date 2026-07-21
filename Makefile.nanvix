@@ -122,6 +122,10 @@ $(CONFIGURED_MARKER): configure
 	@# configure.host fall through to TARGET=X86_64, pulling in 64-bit
 	@# sources for a 32-bit build and producing undefined references to
 	@# ffi_prep_cif_machdep / ffi_prep_closure_loc at link time.
+	@# Enter the build directory explicitly. AX_ENABLE_BUILDDIR otherwise moves
+	@# an open config.log during recursive configure, which fails on WSL 9p.
+	mkdir -p $(BUILD_DIR)
+	cd $(BUILD_DIR) && \
 	CC="$(CC)" \
 	CXX="$(CXX)" \
 	AR="$(AR)" \
@@ -132,13 +136,14 @@ $(CONFIGURED_MARKER): configure
 	ac_cv_sizeof_size_t=4 \
 	ac_cv_sizeof_double=8 \
 	ac_cv_sizeof_long_double=12 \
-	./configure --host=i686-nanvix --build=x86_64-pc-linux-gnu \
+	../configure --srcdir=.. \
+	            --host=i686-nanvix --build=x86_64-pc-linux-gnu \
 	            --prefix="$(INSTALL_PREFIX)" \
 	            --disable-shared --enable-static --disable-docs
 	touch $(CONFIGURED_MARKER)
 
 build: $(CONFIGURED_MARKER)
-	$(MAKE) -j$$(nproc)
+	$(MAKE) -C $(BUILD_DIR) -j$$(nproc)
 
 ffi_test$(EXE): build
 	@printf '#include <stdio.h>\n#include <ffi.h>\nint main() {\n  ffi_cif cif;\n  ffi_type *args[1];\n  args[0] = &ffi_type_uint;\n  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1, &ffi_type_uint, args) == FFI_OK) {\n    printf("FFI_TEST: PASS cif_prep\\n");\n  } else {\n    printf("FFI_TEST: FAIL cif_prep\\n"); return 1;\n  }\n  return 0;\n}\n' > _ffi_test.c
@@ -169,8 +174,8 @@ test: test-functional
 # ===========================================================================
 
 clean:
-	-$(MAKE) clean 2>/dev/null || true
+	-$(MAKE) -C $(BUILD_DIR) clean 2>/dev/null || true
 	rm -f $(CONFIGURED_MARKER) ffi_test$(EXE)
-	rm -rf $(OUT_DIR)
+	rm -rf $(BUILD_DIR)
 
 .PHONY: all build install clean test test-functional
