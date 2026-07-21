@@ -12,6 +12,7 @@ Usage:
     ./z clean     # Remove build artifacts
 """
 
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -38,30 +39,12 @@ from nanvix_zutil.paths import (
 # Artifacts produced inside the Docker container that must be copied
 # back to the host workspace on Windows tar-copy mode (where the build
 # runs in container-local /tmp/build instead of the mounted workspace).
-# Two categories:
-#   * repo-root paths where the Makefile leaves link-step output and the
-#     standalone test expects to find it;
-#   * install-staged paths under .nanvix/out/{release,test} required by
-#     `./z release` (see _staged_output_files()).
 _OUTPUT_FILES = [
     # Makefile leaves ffi_test.elf at the repo root; the standalone test
     # loads it from there. The staged copy under test_out() is for the
     # release tarball.
     "ffi_test.elf",
 ]
-
-
-def _staged_output_files() -> list[str]:
-    """Return install-staged artifact paths (relative to repo_root()) so
-    Windows tar-copy mode also copies them back to the host workspace.
-    """
-    root = repo_root()
-    return [
-        str((dev_out() / "lib" / "libffi.a").relative_to(root)),
-        str((dev_out() / "include" / "ffi.h").relative_to(root)),
-        str((dev_out() / "include" / "ffitarget.h").relative_to(root)),
-        str((test_out() / "ffi_test.elf").relative_to(root)),
-    ]
 
 
 # Makefile variable names (build-system-specific).
@@ -96,11 +79,11 @@ class LibffiBuild(ZScript):
 
         On Windows the build runs in a container-local directory to avoid
         the slow mounted-workspace I/O penalty.  ``output_files`` tells
-        ``nanvix_zutil`` which artifacts to copy back to the host after
-        the build so subsequent test / package steps can find them.
+        ``nanvix_zutil`` to copy the root test ELF back after the build.
+        Staged outputs are written directly to the workspace bind mount.
         """
         cfg = super().docker_config(image)
-        cfg.output_files = list(_OUTPUT_FILES) + _staged_output_files()
+        cfg.output_files = list(_OUTPUT_FILES)
         return cfg
 
     def _make_args(self, *targets: str) -> list[str]:
@@ -345,6 +328,9 @@ class LibffiBuild(ZScript):
             "clean",
             cwd=repo_root(),
         )
+        output = out_dir()
+        if output.exists():
+            shutil.rmtree(output)
 
 
 if __name__ == "__main__":
