@@ -75,19 +75,7 @@ class LibffiBuild(ZScript):
         "bin/mkramfs.exe",
     )
 
-    def docker_config(self, image: str) -> DockerConfig:
-        """Extend the default Docker config with build output copy-back.
-
-        On Windows the build runs in a container-local directory to avoid
-        the slow mounted-workspace I/O penalty.  ``output_files`` tells
-        ``nanvix_zutil`` to copy the root test ELF back after the build.
-        Staged outputs are written directly to the workspace bind mount.
-        """
-        cfg = super().docker_config(image)
-        cfg.output_files = list(_OUTPUT_FILES)
-        return cfg
-
-    def _make_args(self, *targets: str) -> list[str]:
+    def _make_args(self, docker: DockerConfig | None, *targets: str) -> list[str]:
         """Build the common make argument list."""
         sysroot = self.config.get(CFG_SYSROOT, "")
         if not sysroot:
@@ -98,13 +86,11 @@ class LibffiBuild(ZScript):
             )
         toolchain_p = str(TOOLCHAIN_CONTAINER_PATH)
         sysroot_p = (
-            translate_path(self.docker.mounts, Path(sysroot))
-            if self.docker
-            else Path(sysroot)
+            translate_path(docker.mounts, Path(sysroot)) if docker else Path(sysroot)
         )
 
         def translate(p: Path):
-            return translate_path(self.docker.mounts, p) if self.docker else p
+            return translate_path(docker.mounts, p) if docker else p
 
         args = [
             "make",
@@ -139,14 +125,15 @@ class LibffiBuild(ZScript):
         """
         return super().setup()
 
-    def build(self) -> None:
+    def build(self, docker: DockerConfig) -> None:
         """Cross-compile libffi.a and ffi_test.elf for Nanvix.
 
         Both the library and the functional-test binary are produced
         here, where Docker is available. The test step then just runs
         the pre-built binary natively.
         """
-        run(*self._make_args("all"), cwd=repo_root(), docker=self.docker)
+        docker.output_files = list(_OUTPUT_FILES)
+        run(*self._make_args(docker, "all"), cwd=repo_root(), docker=docker)
 
     def test(self) -> None:
         """Run the standalone functional test suite.
